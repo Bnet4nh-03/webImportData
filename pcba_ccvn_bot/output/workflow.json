@@ -1,0 +1,214 @@
+{
+  "bot": {
+    "display_name": "PCBA-CCVN",
+    "username": "@pcba_ccvn_bot",
+    "peer_id": "8656506505",
+    "interface": "Telegram Web K (https://web.telegram.org/k/#@pcba_ccvn_bot)"
+  },
+  "evidence": {
+    "source": "Telegram Web DOM - lịch sử chat đã tải, message id 10409..10634",
+    "history_window": "2026-10-14 (đến 20:50 lần tạo Repair #957)",
+    "repairs_observed_in_history": ["#952", "#953", "#954", "#955", "#956", "#957"],
+    "live_test_2026-10-14_23:2x": "Gửi /repair (msg 10634) - bot KHÔNG phản hồi; /help lúc 22:56 (msg 10632) cũng không phản hồi. Không bấm nút nào trong lần thử live.",
+    "button_click_visibility": "Bấm inline button KHÔNG sinh tin nhắn của người dùng; lựa chọn được suy ra từ tin nhắn tiếp theo của bot."
+  },
+  "global_controls": {
+    "cancel_button": "❎ Hủy",
+    "cancel_command": "/cancel (được nhắc trong các bước nhập text tự do)",
+    "cancel_result_text": "❎ Đã hủy.",
+    "direct_add_command": "/repair add (bot gợi ý trong thông báo phiên hết hạn)",
+    "start_command": "/start -> '✅ Chào mừng {tên} đã quay lại hệ thống PCBA!'"
+  },
+  "special_messages_from_full_history": [
+    {"mid": 8523, "text": "⛔ Lệnh này chỉ dành riêng cho Admin!", "when": "bấm lựa chọn (Admin) trong menu /repair"},
+    {"mid": 8614, "text": "ℹ️ Chưa có thiết bị nào của board '{board_id}' trước đây.\nMã thiết bị mới sẽ được tự động tạo khi lưu record.", "when": "thay cho S2_DEVICE khi board chưa có thiết bị -> đi thẳng tới S3_CONTRACTOR"},
+    {"mid": 9182, "text": "⚠️ Phiên thêm Repair đã hết hạn hoặc không còn tồn tại (có thể do server vừa khởi động lại, hoặc bạn bấm nhầm nút của 1 phiên cũ).\nGõ /repair add để bắt đầu lại.", "when": "bấm nút của phiên cũ / bot restart"},
+    {"mid": 9899, "text": "⚠️ Có lỗi với phiên upload ảnh, bỏ qua bước này.", "when": "lỗi upload ảnh sau sửa -> bot tự sang bước tiếp"}
+  ],
+  "states": [
+    {
+      "id": "S0_START",
+      "trigger": "Người dùng gửi lệnh /repair",
+      "bot_text": "🔧 Quản lý Repair - chọn 1 thao tác:",
+      "input_type": "inline_buttons",
+      "options": ["➕ Thêm mới", "🔍 Tra cứu theo Code (Admin)", "🔎 Tra cứu chi tiết (Admin)", "✏️ Cập nhật (Admin)"],
+      "transitions": [
+        {"on": "➕ Thêm mới", "to": "S1_BOARD", "observed": true},
+        {"on": "🔍 Tra cứu theo Code (Admin)", "to": null, "observed": false},
+        {"on": "🔎 Tra cứu chi tiết (Admin)", "to": null, "observed": false},
+        {"on": "✏️ Cập nhật (Admin)", "to": null, "observed": false}
+      ]
+    },
+    {
+      "id": "S1_BOARD",
+      "bot_text": "➕ Thêm Repair mới\n\nBước 1: Chọn Board:",
+      "input_type": "inline_buttons",
+      "options_ref": "boards.json (28 board, 1 nút/hàng, không phân trang) + ❎ Hủy",
+      "pagination": false,
+      "transitions": [
+        {"on": "<board button>", "to": "S2_DEVICE", "observed": true},
+        {"on": "❎ Hủy", "to": "CANCELLED", "observed": false}
+      ]
+    },
+    {
+      "id": "S2_DEVICE",
+      "bot_text_pattern": "Board này đã có {N} thiết bị. Chọn thao tác:",
+      "input_type": "inline_buttons",
+      "options": [["🔍 Tìm thiết bị", "➕ Thêm mới"], ["❎ Hủy"]],
+      "notes": "N thay đổi theo board (vd 63, 197..202). Đây là bước chọn thiết bị (mã thiết bị = board_id + hậu tố, vd 12030000025GW).",
+      "transitions": [
+        {"on": "➕ Thêm mới", "to": "S3_CONTRACTOR", "bot_ack": "✅ Sẽ tạo mã thiết bị mới khi lưu record.", "observed": true},
+        {"on": "🔍 Tìm thiết bị", "to": null, "observed": false, "notes": "Nhánh chưa từng xuất hiện trong lịch sử - chưa biết prompt tiếp theo"}
+      ]
+    },
+    {
+      "id": "S3_CONTRACTOR",
+      "bot_text": "Chọn nhà thầu thực hiện sửa chữa:\n(Nếu không thấy tên nhà thầu cần chọn, bấm '🚫 Bỏ trống' - có thể dùng /contractor add để thêm mới, rồi cập nhật lại record sau qua /repair update)",
+      "input_type": "inline_buttons",
+      "options": ["EC", "ES", "ITS", "HTE", "SE HN", "SE HCM", "🚫 Không có trong danh sách / Bỏ trống", "❎ Hủy"],
+      "transitions": [
+        {"on": "<contractor>", "to": "S4_PHOTO_BEFORE_TEST", "bot_ack_pattern": "✅ Đã chọn nhà thầu: {name}", "observed": true},
+        {"on": "🚫 Không có trong danh sách / Bỏ trống", "to": "S4_PHOTO_BEFORE_TEST", "bot_ack": "✅ Đã bỏ trống nhà thầu (có thể cập nhật sau qua /repair update).", "observed": true}
+      ]
+    },
+    {
+      "id": "S4_PHOTO_BEFORE_TEST",
+      "bot_text": "📷 Gửi ảnh TRƯỚC KHI TEST (bắt buộc tối thiểu 1, tối đa 2 ảnh).\nVui lòng gửi ảnh - tùy chọn bỏ qua chỉ xuất hiện sau khi đủ số ảnh tối thiểu.",
+      "input_type": "photo_upload",
+      "min_photos": 1,
+      "max_photos": 2,
+      "options": ["❎ Hủy"],
+      "after_each_photo": {
+        "bot_text_pattern": "✅ Đã lưu ảnh {i}/2 (TRƯỚC KHI TEST). Gửi thêm ảnh, hoặc bấm nút '✅ Xong / Bỏ qua' bên trên:",
+        "options": ["✅ Xong / Bỏ qua", "❎ Hủy"]
+      },
+      "transitions": [
+        {"on": "✅ Xong / Bỏ qua", "to": "S5_TEST_RESULT", "observed": true},
+        {"on": "đủ 2 ảnh", "to": "S5_TEST_RESULT", "observed": false, "notes": "Giả định - lịch sử chỉ có trường hợp 1 ảnh"}
+      ]
+    },
+    {
+      "id": "S5_TEST_RESULT",
+      "bot_text": "Bước 3: Kết quả test (test_tool_result):",
+      "field": "test_tool_result",
+      "input_type": "inline_buttons",
+      "options": ["✅ PASS", "❌ FAIL", "🗑 Discard", "❎ Hủy"],
+      "transitions": [
+        {"on": "✅ PASS", "to": "S10_TICKET", "observed": true, "notes": "Repair #957: PASS bỏ qua thẳng tới ticket ID"},
+        {"on": "❌ FAIL", "to": "S6_FAILURE_CAUSE", "observed": true},
+        {"on": "🗑 Discard", "to": "S10_TICKET", "observed": true, "notes": "6 lần (Repair #835-837, #923-925): giống PASS, sang thẳng ticket. Kết quả: 'Thiết bị (code): -', 'Disposition: Discard' - KHÔNG có mã thiết bị"}
+      ]
+    },
+    {
+      "id": "S6_FAILURE_CAUSE",
+      "bot_text": "❌ FAIL - Nhập failure_cause (nguyên nhân lỗi):\nGõ /cancel để hủy.",
+      "field": "failure_cause",
+      "input_type": "free_text",
+      "transitions": [{"on": "<text>", "to": "S7_DISPOSITION", "observed": true}]
+    },
+    {
+      "id": "S7_DISPOSITION",
+      "bot_text": "Nhập disposition (vd: repair U12, repair C46):\nGõ /cancel để hủy.",
+      "field": "disposition",
+      "input_type": "free_text",
+      "transitions": [{"on": "<text>", "to": "S8_AFTER_REPAIR_RESULT", "observed": true}]
+    },
+    {
+      "id": "S8_AFTER_REPAIR_RESULT",
+      "bot_text": "Kết quả sau khi sửa (after_repair_result):",
+      "field": "after_repair_result",
+      "input_type": "inline_buttons",
+      "options": [["✅ PASS", "❌ FAIL"], ["❎ Hủy"]],
+      "transitions": [
+        {"on": "✅ PASS", "to": "S8B_PHOTO_AFTER_REPAIR", "observed": true},
+        {"on": "❌ FAIL", "to": null, "observed": false}
+      ]
+    },
+    {
+      "id": "S8B_PHOTO_AFTER_REPAIR",
+      "bot_text": "📷 Gửi ảnh SAU KHI SỬA XONG VÀ PASS (tối đa 3 ảnh).\nGửi ảnh, hoặc bấm nút '✅ Xong / Bỏ qua' bên trên khi xong.",
+      "input_type": "photo_upload_optional",
+      "min_photos": 0,
+      "max_photos": 3,
+      "options": ["✅ Xong / Bỏ qua", "❎ Hủy"],
+      "after_each_photo": {
+        "bot_text_pattern": "✅ Đã lưu ảnh {i}/3 (SAU KHI SỬA XONG VÀ PASS). Gửi thêm ảnh, hoặc bấm nút '✅ Xong / Bỏ qua' bên trên:",
+        "options": ["✅ Xong / Bỏ qua", "❎ Hủy"]
+      },
+      "transitions": [{"on": "✅ Xong / Bỏ qua", "to": "S9_STATION_TEST_STATUS", "observed": true}]
+    },
+    {
+      "id": "S9_STATION_TEST_STATUS",
+      "bot_text": "Trạng thái kiểm tra vận hành tại trạm sạc (charging_station_test_status):",
+      "field": "charging_station_test_status",
+      "input_type": "inline_buttons",
+      "options": [["⏳ Pending", "✅ OK"], ["❎ Hủy"]],
+      "transitions": [{"on": "⏳ Pending | ✅ OK", "to": "S10_TICKET", "observed": true, "notes": "Không xác định được nút nào đã bấm (click không hiện trong chat)"}]
+    },
+    {
+      "id": "S10_TICKET",
+      "bot_text": "Nhập ticket ID:",
+      "field": "ticket_id",
+      "input_type": "free_text_or_button",
+      "options": ["🚫 Không có ticket", "❎ Hủy"],
+      "transitions": [
+        {"on": "🚫 Không có ticket", "to": "S11_SN", "bot_ack": "ℹ️ Đã bỏ qua ticket ID.", "observed": true},
+        {"on": "<ticket id không tìm thấy>", "to": "S11_SN", "bot_ack": "⚠️ Không tìm thấy thông tin ticket qua API. Vui lòng nhập thủ công.", "observed": true},
+        {"on": "<ticket id tìm thấy qua API>", "to": null, "observed": false, "notes": "Có thể bot tự điền SN/Date/Station... - chưa quan sát được"}
+      ]
+    },
+    {
+      "id": "S11_SN",
+      "bot_text": "Nhập SN (Serial Number):",
+      "field": "sn",
+      "input_type": "free_text_or_button",
+      "options": ["🚫 Bỏ qua", "❎ Hủy"],
+      "transitions": [{"on": "<text> | 🚫 Bỏ qua", "to": "S12_DATE_ONSITE", "observed": true}]
+    },
+    {
+      "id": "S12_DATE_ONSITE",
+      "bot_text": "Nhập Date onsite (định dạng vd 8/17/2026):",
+      "field": "date_onsite",
+      "format": "M/D/YYYY (vd 8/29/2026, 4/11/2026)",
+      "input_type": "free_text_or_button",
+      "options": ["🚫 Bỏ qua", "❎ Hủy"],
+      "transitions": [{"on": "<text> | 🚫 Bỏ qua", "to": "S13_ORIGINAL_PHENOMENON", "observed": true}]
+    },
+    {
+      "id": "S13_ORIGINAL_PHENOMENON",
+      "bot_text": "Nhập Original phenomenon (hiện tượng lỗi ban đầu):",
+      "field": "original_phenomenon",
+      "input_type": "free_text_or_button",
+      "options": ["🚫 Bỏ qua", "❎ Hủy"],
+      "transitions": [{"on": "<text> | 🚫 Bỏ qua", "to": "S14_STATION_CODE", "observed": true}]
+    },
+    {
+      "id": "S14_STATION_CODE",
+      "bot_text": "Nhập Station code:",
+      "field": "station_code",
+      "input_type": "free_text_or_button",
+      "options": ["🚫 Bỏ qua", "❎ Hủy"],
+      "transitions": [{"on": "<text> | 🚫 Bỏ qua", "to": "S15_FAILURE_VERIFICATION_PHOTO", "observed": true}]
+    },
+    {
+      "id": "S15_FAILURE_VERIFICATION_PHOTO",
+      "bot_text": "📷 Gửi ảnh Failure verification photo (ảnh xác minh hiện tượng lỗi thực tế):",
+      "field": "failure_verification_photo",
+      "input_type": "photo_upload_optional",
+      "options": ["🚫 Bỏ qua", "❎ Hủy"],
+      "transitions": [{"on": "🚫 Bỏ qua (hoặc gửi ảnh - chưa quan sát)", "to": "DONE_CREATED", "observed": true}],
+      "warning": "BƯỚC CUỐI - hành động ở bước này TẠO RECORD NGAY, bot không có bước xác nhận riêng."
+    },
+    {
+      "id": "DONE_CREATED",
+      "bot_text_pattern": "✅ Đã tạo Repair #{repair_id}\n  Board: {board_id}\n  Thiết bị (code): {device_code}\n  Test tool result: {PASS|FAIL}\n  ...",
+      "terminal": true,
+      "parse_fields": ["repair_id", "board_id", "device_code", "test_tool_result", "failure_cause", "disposition", "after_repair_result", "ticket_id"]
+    },
+    {
+      "id": "CANCELLED",
+      "bot_text": "❎ Đã hủy.",
+      "terminal": true
+    }
+  ]
+}

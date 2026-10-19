@@ -1,0 +1,260 @@
+<!doctype html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#0b5f57">
+  <title>Tem Hàng Lỗi · CCVN</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Be+Vietnam+Pro:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="css/style.css">
+  <script src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js" defer></script>
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="logo">⚡</span>
+      <div><b>Tem Hàng Lỗi</b><small>CCVN · đọc tem + đối chiếu DB</small></div>
+    </div>
+    <div class="top-actions">
+      <span id="sync" class="sync off" title="">● Đang kết nối…</span>
+      <button id="btnPhone" class="icon-btn" title="Kết nối điện thoại">📱</button>
+      <button id="btnSettings" class="icon-btn" title="Cài đặt AI">⚙️</button>
+    </div>
+  </header>
+
+  <main>
+    <div id="banners"></div>
+    <section id="tgbar" class="tgbar" aria-live="polite"></section>
+
+    <section class="capture">
+      <label class="cap-btn primary">
+        <span class="cap-ico">📷</span><span><b>Chụp tem</b><small>mỗi ảnh một dòng</small></span>
+        <input id="inpCamera" type="file" accept="image/*" capture="environment" hidden>
+      </label>
+      <label class="cap-btn">
+        <span class="cap-ico">🖼️</span><span><b>Chọn ảnh</b><small>chọn nhiều ảnh cùng lúc</small></span>
+        <input id="inpGallery" type="file" accept="image/*" multiple hidden>
+      </label>
+      <label class="check-row compact"><input type="checkbox" id="chkEdit"> Xoay / cắt ảnh trước khi gửi</label>
+    </section>
+
+    <section class="toolbar">
+      <div id="filters" class="filters" role="tablist"></div>
+      <div class="tools">
+        <input id="search" type="search" placeholder="Tìm ticket, SN, trạm…" autocomplete="off">
+        <span class="zoomctl" title="Thu phóng bảng (lưu trên máy này) — Ctrl+Alt+ / Ctrl+Alt-">
+          <button type="button" class="btn sm" id="zoomOut" aria-label="Thu nhỏ bảng">−</button>
+          <button type="button" class="btn sm zoomval" id="zoomVal" title="Về 100%">100%</button>
+          <button type="button" class="btn sm" id="zoomIn" aria-label="Phóng to bảng">+</button>
+        </span>
+        <button id="btnAddRow" class="btn">+ Dòng</button>
+        <button id="btnAddCol" class="btn">+ Cột</button>
+        <button id="btnCopy" class="btn">⧉ Sao chép</button>
+        <button id="btnExport" class="btn primary">⬇ Excel</button>
+        <details class="menu">
+          <summary class="btn">⋯</summary>
+          <div class="menu-list">
+            <a href="api/photos.zip" download>🗂 Tải toàn bộ ảnh (.zip)</a>
+            <button id="btnRematch">🔁 Đối chiếu lại DB cho tất cả</button>
+            <button id="btnRetryErrors">↻ Đọc lại các ảnh lỗi</button>
+            <button id="btnClearAll" class="danger">🗑 Xóa toàn bộ bảng</button>
+          </div>
+        </details>
+      </div>
+    </section>
+
+    <div class="legend">
+      <span><i class="lg-uncertain"></i>AI chưa chắc</span>
+      <span><i class="lg-fixed"></i>Đã sửa theo DB</span>
+      <span><i class="lg-fromdb"></i>Điền từ DB</span>
+      <span><i class="lg-same"></i>Khớp DB</span>
+      <span><i class="lg-mismatch"></i>Khác DB</span>
+    </div>
+
+    <div class="table-wrap">
+      <table id="grid"><thead></thead><tbody></tbody></table>
+    </div>
+    <div id="cards" class="cards"></div>
+    <div id="emptyState" class="empty" hidden>
+      <div class="empty-ico">📷</div>
+      <b>Chưa có tem nào</b>
+      <p>Bấm <b>Chụp tem</b> trên điện thoại hoặc máy tính — mỗi ảnh là một dòng, mọi thiết bị đều thấy ngay.</p>
+    </div>
+  </main>
+
+  <input id="inpRowCam" type="file" accept="image/*" capture="environment" hidden>
+  <input id="inpRowPick" type="file" accept="image/*" multiple hidden>
+
+  <!-- Chi tiết một dòng -->
+  <aside id="drawer" class="drawer" hidden>
+    <div class="drawer-backdrop" data-close></div>
+    <div class="drawer-panel" role="dialog" aria-modal="true">
+      <div id="drawerBody"></div>
+    </div>
+  </aside>
+
+  <!-- Chỉnh ảnh -->
+  <div id="editor" class="modal" hidden>
+    <div class="modal-box editor-box">
+      <div class="modal-head"><b>Chỉnh ảnh</b><span id="editorCounter" class="muted"></span></div>
+      <div class="editor-stage"><canvas id="editorCanvas"></canvas><div id="cropRect" class="crop-rect" hidden></div></div>
+      <p class="muted small">Kéo trên ảnh để chọn vùng cắt quanh khung tem (không bắt buộc).</p>
+      <div class="actions">
+        <button class="btn" data-act="rotl">⟲ Trái</button>
+        <button class="btn" data-act="rotr">⟳ Phải</button>
+        <button class="btn" data-act="reset">Đặt lại</button>
+        <button class="btn" data-act="retake">Chụp lại</button>
+        <button class="btn" data-act="skip">Bỏ ảnh</button>
+        <button class="btn primary" data-act="ok">Dùng ảnh này</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Xem ảnh lớn -->
+  <div id="viewer" class="modal viewer" hidden>
+    <div class="viewer-bar">
+      <span id="viewerTitle"></span>
+      <span>
+        <button class="btn" id="viewerDel" hidden>🗑 Xóa ảnh</button>
+        <button class="btn" id="viewerClose">✕</button>
+      </span>
+    </div>
+    <img id="viewerImg" alt="Ảnh">
+    <div class="viewer-nav">
+      <button class="btn" id="viewerPrev">‹</button>
+      <span id="viewerCount" class="muted"></span>
+      <button class="btn" id="viewerNext">›</button>
+    </div>
+  </div>
+
+  <!-- Kết nối điện thoại -->
+  <div id="phoneModal" class="modal" hidden>
+    <div class="modal-box">
+      <div class="modal-head"><b>📱 Mở trên điện thoại</b><button class="icon-btn dark" data-close-modal>✕</button></div>
+      <div id="phoneBody"></div>
+    </div>
+  </div>
+
+  <!-- Cột tùy chỉnh -->
+  <div id="colModal" class="modal" hidden>
+    <form class="modal-box" id="colForm">
+      <div class="modal-head"><b id="colTitle">Cột mới</b></div>
+      <label class="field"><span>Tên cột</span><input id="colName" required maxlength="60"></label>
+      <label class="field"><span>Giá trị mặc định cho dòng mới (tùy chọn)</span><input id="colDefault" maxlength="200"></label>
+      <label class="check-row"><input type="checkbox" id="colFill"> Điền giá trị mặc định vào các dòng đang trống</label>
+      <div class="actions">
+        <button type="button" class="btn danger-outline" id="colDelete">Xóa cột</button>
+        <button type="button" class="btn" data-close-modal>Hủy</button>
+        <button type="submit" class="btn primary">Lưu</button>
+      </div>
+    </form>
+  </div>
+
+  <!-- Điền nhanh một cột -->
+  <div id="fillModal" class="modal" hidden>
+    <div class="modal-box">
+      <div class="modal-head"><b id="fillTitle">Điền nhanh</b></div>
+      <label class="field"><span>Giá trị</span><div id="fillField"></div></label>
+      <label class="check-row"><input type="checkbox" id="fillDefault"> Tự điền giá trị này cho ảnh/dòng mới (📌)</label>
+      <div class="actions">
+        <button type="button" class="btn" data-close-modal>Hủy</button>
+        <button type="button" class="btn" id="fillSaveOnly">Chỉ lưu mặc định</button>
+        <button type="button" class="btn" id="fillAll">Điền tất cả dòng</button>
+        <button type="button" class="btn primary" id="fillEmpty">Điền các dòng trống</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Cài đặt -->
+  <div id="settings" class="modal" hidden>
+    <form class="modal-box" id="settingsForm">
+      <div class="modal-head"><b>⚙️ Cài đặt</b><button type="button" class="icon-btn dark" data-close-modal>✕</button></div>
+      <p class="note">Cài đặt lưu trên máy tính chạy server và dùng chung cho mọi thiết bị. Điện thoại không cần nhập key.</p>
+      <label class="field">
+        <span>AI đọc tem</span>
+        <select id="setProvider">
+          <option value="gemini">Google Gemini — có gói miễn phí</option>
+          <option value="ollama">Ollama — model chạy trên máy, miễn phí</option>
+        </select>
+      </label>
+      <div data-provider="gemini">
+        <label class="field">
+          <span>Gemini API key — lấy miễn phí tại <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">aistudio.google.com/apikey</a></span>
+          <input id="setKey" type="password" autocomplete="off" spellcheck="false">
+        </label>
+        <label class="field">
+          <span>Model (bấm Kiểm tra để tải danh sách)</span>
+          <input id="setGeminiModel" list="geminiModels" autocomplete="off" spellcheck="false">
+          <datalist id="geminiModels"></datalist>
+        </label>
+        <p class="note">Đọc tem: <b>gemini-flash-lite-latest</b> nhanh nhất (~2–3 giây/ảnh), <b>gemini-flash-latest</b> ~7–9 giây/ảnh.
+          DB luôn kiểm tra lại từng ký tự, nên model nhanh thường là đủ.</p>
+        <label class="field">
+          <span>Model xác nhận lần 2 (chỉ dùng khi chưa chắc ticket nào — nên chọn model mạnh)</span>
+          <input id="setConfirmModel" list="geminiModels" autocomplete="off" spellcheck="false">
+        </label>
+      </div>
+      <div data-provider="ollama">
+        <label class="field"><span>Địa chỉ Ollama (tính từ máy chạy server)</span>
+          <input id="setOllamaUrl" autocomplete="off" spellcheck="false" placeholder="http://localhost:11434"></label>
+        <label class="field"><span>Model có vision</span>
+          <input id="setOllamaModel" list="ollamaModels" autocomplete="off" spellcheck="false" placeholder="qwen3-vl:4b">
+          <datalist id="ollamaModels"></datalist></label>
+      </div>
+      <div class="grid2">
+        <label class="field"><span>Số ảnh đọc song song</span>
+          <select id="setParallel"><option>1</option><option>2</option><option>3</option><option>4</option><option>5</option></select></label>
+        <label class="field"><span>Định dạng Date onsite</span><select id="setDateFormat"></select></label>
+      </div>
+      <label class="field"><span>Đọc những ô nào</span>
+        <select id="setReadMode">
+          <option value="full">Đầy đủ — đọc cả 7 ô (Ticket, Mã lỗi, Mô tả lỗi…)</option>
+          <option value="codes">Mã + ngày — Ticket, SN trụ sạc, Mã trạm, Ngày thay thế (bỏ Model, Mã lỗi, Mô tả)</option>
+          <option value="quick">Nhanh nhất — Mã trạm, Model, SN, Ngày; Ticket lấy từ DB</option>
+        </select></label>
+      <p class="note" data-readmode="codes">Đọc 4 mã cần để khớp ticket: <b>Ticket, SN, Mã trạm, Ngày thay thế</b>. Bỏ phần chữ dài (Mã lỗi + Mô tả lỗi)
+        — vốn để trống khi nhập bot. Chính xác gần bằng Đầy đủ vì vẫn so Ticket từng ký tự với DB.</p>
+      <p class="note" data-readmode="quick">Chế độ nhanh: AI không đọc Ticket và Mô tả lỗi; Ticket được tìm trong DB theo <b>SN + ngày thay thế (±1 ngày) + mã trạm</b>.
+        Chỉ nhận kết quả khi <b>SN khớp DB</b> và ra đúng một ticket — nếu không, app tự đọc lại đầy đủ cả Ticket.
+        Với Ollama trên CPU, phần lớn thời gian là xử lý ảnh nên chế độ này chỉ nhanh hơn vài giây; với Gemini nhanh hơn rõ hơn.</p>
+      <label class="field"><span>Kích thước ảnh gửi AI (ảnh lưu trong bảng giữ nguyên)</span>
+        <select id="setAiMaxSide">
+          <option value="1024">1024 px — nhanh (Ollama nhanh hơn ~40%, khuyên dùng)</option>
+          <option value="1280">1280 px</option>
+          <option value="1568">1568 px — đầy đủ như ảnh chụp</option>
+        </select></label>
+      <label class="field"><span>Cách đọc tem</span>
+        <select id="setSpeed">
+          <option value="fast">Nhanh — AI đọc từng ký tự, DB kiểm tra lại (khuyên dùng)</option>
+          <option value="careful">Kỹ — AI suy nghĩ lâu hơn trước khi trả lời (chậm hơn vài lần)</option>
+        </select></label>
+      <label class="field"><span>Thu phóng bảng trên máy này: <b id="setZoomVal">100%</b></span>
+        <input id="setZoom" type="range" min="60" max="130" step="5" value="100"></label>
+      <label class="check-row"><input type="checkbox" id="setConfirm"> Chưa chắc ticket nào thì gửi ảnh + ticket ứng viên cho AI chọn (thêm 1 lần gọi AI, chỉ khi cần)</label>
+      <div id="setStatus" class="small"></div>
+      <div class="actions">
+        <button type="button" class="btn" id="btnTestKey">Kiểm tra</button>
+        <button type="button" class="btn danger-outline" id="btnDeleteKey" data-provider="gemini">Xóa key</button>
+        <button type="submit" class="btn primary">Lưu</button>
+      </div>
+    </form>
+  </div>
+
+  <!-- Xác nhận nhập lên bot Telegram -->
+  <div id="tgModal" class="modal" hidden>
+    <div class="modal-box tg-box">
+      <div class="modal-head"><b id="tgTitle">Nhập lên bot PCBA-CCVN</b><button class="icon-btn dark" data-close-modal>✕</button></div>
+      <div id="tgBody"></div>
+      <div class="actions">
+        <button type="button" class="btn" data-close-modal>Hủy</button>
+        <button type="button" class="btn primary" id="tgGo">📤 Tạo Repair trên bot</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="toast" class="toast" hidden></div>
+  <script type="module" src="js/app.js"></script>
+</body>
+</html>

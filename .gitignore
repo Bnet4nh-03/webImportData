@@ -1,0 +1,27 @@
+# ---- Bí mật + dữ liệu thật: KHÔNG đưa lên git ----
+# data/: bảng (state.json: ticket, SN, trạm thật), ảnh tem/sau sửa, config.json (Gemini API key), nhật ký Telegram
+data/
+# Lịch sử chat bot PCBA-CCVN (SN, ticket, ảnh thật) và danh sách Repair đã tạo
+pcba_ccvn_bot/raw/
+pcba_ccvn_bot/output/created_repairs.csv
+# Phiên đăng nhập / khoá nếu sau này dùng Telethon hoặc biến môi trường
+*.session
+*.session-journal
+.env
+*.db
+*.db-wal
+*.db-shm
+
+# ---- Rác của Python / trình soạn thảo ----
+__pycache__/
+*.pyc
+.venv/
+venv/
+.vscode/
+.idea/
+*.log
+.DS_Store
+Thumbs.db
+
+# Cấu hình riêng của Claude Code trên máy này
+.claude/
