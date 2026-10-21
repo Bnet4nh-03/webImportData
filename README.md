@@ -93,8 +93,8 @@ Bảng gợi ý Board theo model nằm trong `BOARD_RULES` ở `js/columns.js`; 
   dán bảng copy từ Excel = trải xuống/sang phải từ ô đầu (thêm dòng mới nếu dư). Giá trị cho ô chọn được khớp với danh sách (không phân biệt hoa/thường;
   Board chỉ cần mã, vd `12070000153`); giá trị không có trong danh sách bị bỏ qua và báo số ô.
   Nếu ô chọn đang xổ danh sách xuống, bấm **Esc** trước khi Ctrl+C.
-- **Kéo ô vuông nhỏ** ở góc ô đang chọn xuống dưới để điền giống ô đó (như Excel). **Ctrl+D**: điền xuống theo dòng đầu của vùng. **Delete**: xoá cả vùng.
-- **Thu phóng bảng**: nút − 100% + trên thanh công cụ, Ctrl+Alt+= / Ctrl+Alt+−, hoặc thanh trượt trong ⚙️ (lưu riêng trên từng máy).
+- **Kéo ô vuông** ở góc ô đang chọn xuống dưới để điền giống ô đó (như Excel). **Nháy đúp ô vuông**: điền mọi ô **trống** bên dưới (không ghi đè ô đã có). **Ctrl+D**: điền xuống theo dòng đầu của vùng. **Delete**: xoá cả vùng.
+- **Thu phóng bảng**: Ctrl+Alt+= / Ctrl+Alt+−, hoặc thanh trượt trong ⚙️ (lưu riêng trên từng máy).
 - Dòng mới mặc định: after_repair_result = **PASS**, charging_station_test_status = **Pending** (📌 Điền nhanh vẫn ghi đè được).
   **Original phenomenon để trống**: không lấy từ DB, cũng không lấy chữ AI đọc trên tem (vẫn xem được ở cột Tem/DB trong ngăn chi tiết, bấm ← Tem / ← DB nếu cần).
 
@@ -106,11 +106,20 @@ Bảng gợi ý Board theo model nằm trong `BOARD_RULES` ở `js/columns.js`; 
 
 ## Các thao tác khác
 
-- **Lọc** theo Cần xem / Chưa khớp DB / Lỗi / Đã kiểm, và tìm theo ticket, SN, trạm.
+- **📊 Tổng hợp**: bộ lọc (Cần xem / Chưa khớp DB / Lỗi / Đã kiểm) + bảng đếm theo loại Board. Khi đóng khung mà đang lọc, cạnh nút hiện chip bộ lọc (✕ để bỏ lọc).
+- **⋯** chứa + Cột, + Dòng, dán, xoá… và **🗄 Cập nhật DB ticket từ web**.
 - **Điền nhanh**: bấm tên cột (vd. Board) để điền cho các dòng trống hoặc tất cả các dòng. Tick 📌 để ảnh chụp sau đó tự điền giá trị này.
 - **+ Cột**: thêm cột riêng (Kho, Người kiểm…).
 - **Dán từ Excel**: copy một vùng ô, bấm vào ô bắt đầu rồi dán.
 - **⬇ Excel**: tạo file `broken_items_YYYY-MM-DD.xlsx`; mọi giá trị ghi dạng chữ để giữ số 0 ở đầu.
+
+## Cập nhật DB ticket từ web (⚙️ → tab Đồng bộ DB)
+
+Dùng tool `D: _WORKSPACE_Python_Takedata_CCVN` (chạy ngầm, không sửa file của tool) để tải ticket mới vào `ccts_tickets.db`.
+1. Đăng nhập console.cnpowercore.com → F12 → lấy cookie `ssoticket` và header `token` → dán vào 2 ô, bấm **Lưu**.
+2. **Kiểm tra token** (4 request, không ghi DB) → **Lấy ticket mới** (hằng ngày). *Tiếp tục* / *Quét lại toàn bộ* nằm trong mục nâng cao.
+3. Xong: server tự nạp lại DB và khớp lại các dòng chưa khớp. Token chỉ lưu trong `data/config.json` (không gửi về trình duyệt, không ghi log).
+Khi DB cũ hơn 2 ngày, đầu trang hiện nhắc ⟳ Cập nhật.
 
 ## Nhập lên bot Telegram PCBA-CCVN (từng dòng)
 

@@ -31,6 +31,7 @@ from urllib.parse import parse_qs, unquote, urlparse
 
 import matching as M
 import ocr
+import dbsync as DS
 import telegram_bot as TG
 
 DEFAULT_DB = r"D:\00_WORKSPACE\01_Python\04_Takedata_CCVN\ccts_tickets.db"
@@ -69,7 +70,14 @@ DEFAULT_CONFIG = {
     "aiMaxSide": 1024,  # thu nhỏ ảnh gửi AI (px cạnh dài, 0 = giữ nguyên): nhanh hơn ~40% với Ollama trên CPU
     "tgCdp": TG.DEFAULT_CDP,  # cổng debug của Edge mở Telegram Web (profile riêng cho bot)
     "tgTimeout": 45,  # giây chờ bot trả lời mỗi bước
+    # Đồng bộ ccts_tickets.db từ web CNPowercore (⚙️ → Đồng bộ DB). Cookie/token chỉ lưu ở data/config.json.
+    "cctsSso": "",
+    "cctsToken": "",
+    "cctsToolDir": DS.DEFAULT_TOOL_DIR,
+    "cctsPageSize": 100,
+    "cctsDelay": 3,
 }
+SECRET_KEYS = ("geminiKey", "cctsSso", "cctsToken")  # không bao giờ gửi về trình duyệt
 TG_ACTIVE = ("queued", "running")
 
 uid = lambda p: p + uuid.uuid4().hex[:10]  # noqa: E731
@@ -982,9 +990,10 @@ def lan_urls(port: int) -> list[str]:
 
 
 def public_config(c: dict) -> dict:
-    out = {k: v for k, v in c.items() if k != "geminiKey"}
-    k = c.get("geminiKey") or ""
-    out["geminiKeyHint"] = ("••••" + k[-4:]) if k else ""
+    out = {k: v for k, v in c.items() if k not in SECRET_KEYS}
+    for key in SECRET_KEYS:
+        v = c.get(key) or ""
+        out[key + "Hint"] = ("••••" + v[-4:]) if v else ""
     return out
 
 
@@ -1045,7 +1054,7 @@ class Handler(SimpleHTTPRequestHandler):
                 index.ensure()
                 return self._json(200, {"ok": True, "urls": lan_urls(self.port) if self.lan else [],
                                         "local": f"http://localhost:{self.port}", "lan": self.lan,
-                                        "db": {"ok": index.ok and index.count > 0, "count": index.count, "name": Path(index.db_path).name}})
+                                        "db": {"ok": index.ok and index.count > 0, "count": index.count, "name": Path(index.db_path).name, "newest": DS.db_info(index.db_path).get("newest", "")}})
             if p == "/api/config":
                 return self._json(200, public_config(store.config))
             m = re.fullmatch(r"/api/rows/([\w-]+)/candidates", p)
@@ -1054,6 +1063,8 @@ class Handler(SimpleHTTPRequestHandler):
             m = re.fullmatch(r"/api/rows/([\w-]+)/tgpreview", p)
             if m:
                 return self._json(200, {"ok": True, **store.tg_preview(m[1])})
+            if p == "/api/dbsync":
+                return self._json(200, {"ok": True, **dbsync.snapshot(), "db": DS.db_info(index.db_path)})
             if p == "/api/tg/status":
                 return self._json(200, {"ok": True, **TG.cdp_status(store.config["tgCdp"]),
                                         "edgePath": TG.find_edge(), "playwright": _has_playwright(),
@@ -1204,6 +1215,14 @@ class Handler(SimpleHTTPRequestHandler):
                 for r in [r for r in store.rows if r["status"] == "error" and r.get("image")]:
                     store.retry(r["id"], False)
                 return self._json(200, {"ok": True})
+            if p == "/api/dbsync/start":
+                c = store.config
+                dbsync.start(str(body.get("mode") or "new"), c.get("cctsSso", ""), c.get("cctsToken", ""), index.db_path,
+                             c.get("cctsToolDir") or DS.DEFAULT_TOOL_DIR, int(c.get("cctsPageSize") or 100),
+                             float(c.get("cctsDelay") if c.get("cctsDelay") is not None else 3))
+                return self._json(200, {"ok": True})
+            if p == "/api/dbsync/stop":
+                return self._json(200, {"ok": True, "stopped": dbsync.stop()})
             if p == "/api/tg/stop":
                 return self._json(200, {"ok": True, **tgworker.stop()})
             if p in ("/api/tg/launch", "/api/tg/ensure"):
@@ -1245,6 +1264,15 @@ class Handler(SimpleHTTPRequestHandler):
             c["readMode"] = body["readMode"]
         if str(body.get("aiMaxSide", "")) in ("0", "1024", "1280", "1568"):
             c["aiMaxSide"] = int(body["aiMaxSide"])
+        for k in ("cctsSso", "cctsToken"):  # chỉ gửi khi người dùng gõ giá trị mới / xoá
+            if k in body:
+                c[k] = str(body[k] or "").strip()
+        if body.get("cctsToolDir"):
+            c["cctsToolDir"] = str(body["cctsToolDir"]).strip()
+        if body.get("cctsPageSize"):
+            c["cctsPageSize"] = max(10, min(1000, int(body["cctsPageSize"])))
+        if body.get("cctsDelay") not in (None, ""):
+            c["cctsDelay"] = max(0.0, min(60.0, float(body["cctsDelay"])))
         if "aiConfirm" in body:
             c["aiConfirm"] = bool(body["aiConfirm"])
         if re.fullmatch(r"http://(127\.0\.0\.1|localhost):\d{2,5}/?", str(body.get("tgCdp") or "")):
@@ -1290,6 +1318,23 @@ index: M.TicketIndex
 store: Store
 worker = Worker()
 tgworker = TelegramWorker()
+
+
+def _after_dbsync(status: str) -> None:
+    """Đồng bộ xong: nạp lại chỉ mục DB ngay, rồi đối chiếu lại các dòng chưa khớp ticket (trừ dòng nhập tay)."""
+    if status not in ("completed", "stopped_incremental", "stopped_limit", "interrupted"):
+        return
+    index.checked_at = 0
+    index.ensure()
+    with store.lock:
+        ids = [r["id"] for r in store.rows if r["status"] == "done" and (r.get("match") or {}).get("status") != "matched"
+               and (r.get("match") or {}).get("how") != "manual"]
+    for rid in ids:
+        store.match(rid)
+    hub.send({"type": "dbsync_done", "rematched": len(ids), "db": DS.db_info(index.db_path)})
+
+
+dbsync = DS.DbSync(emit=lambda e: hub.send(e), on_done=_after_dbsync)
 
 
 _data_lock = None  # giữ file khoá suốt thời gian server chạy

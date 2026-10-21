@@ -431,6 +431,11 @@ function renderSummary() {
   const el = $("#summary");
   el.hidden = !showSummary() || !st.rows.length;
   $("#btnSummary").classList.toggle("on", showSummary());
+  // Bộ lọc nằm trong khung Tổng hợp; khung đóng mà đang lọc -> nhãn nhỏ cạnh nút để biết + bỏ lọc nhanh.
+  const f = FILTERS.find((x) => x.key === filter);
+  $("#filterBadge").innerHTML = filter !== "all" && f && el.hidden
+    ? `<button class="chip on fbadge" data-clear-filter title="Đang lọc — bấm để bỏ lọc">${esc(f.label)} <b>${st.rows.filter(f.test).length}</b> ✕</button>`
+    : "";
   if (el.hidden) return;
   const list = visibleRows();
   const { rows, total } = summarize(list);
@@ -440,7 +445,7 @@ function renderSummary() {
     const pct = c.key !== "total" && g.total ? ` <small>${Math.round((100 * v) / g.total)}%</small>` : "";
     return `<td class="n ${c.key} ${v ? "" : "zero"}">${v}${v && c.key !== "total" && c.key !== "imported" ? pct : ""}</td>`;
   };
-  el.innerHTML = `<div class="sum-head"><b>📊 Tổng hợp theo Board</b>
+  $("#sumBody").innerHTML = `<div class="sum-head"><b>Theo loại Board</b>
       <span class="muted small">${narrowed ? `theo bộ lọc / tìm kiếm hiện tại: ${list.length}/${st.rows.length} dòng` : `${st.rows.length} dòng`} · bấm tên Board để lọc bảng</span>
       ${search ? `<button class="link-btn small" data-sum-clear>Bỏ lọc Board</button>` : ""}</div>
     <div class="sum-wrap"><table class="sum">
@@ -450,6 +455,12 @@ function renderSummary() {
     </table></div>`;
 }
 
+$("#filterBadge").addEventListener("click", (e) => {
+  if (!e.target.closest("[data-clear-filter]")) return;
+  filter = "all";
+  pref.set("filter", filter);
+  render();
+});
 $("#btnSummary").onclick = () => {
   pref.set("summary", showSummary() ? "0" : "1");
   renderSummary();
@@ -535,6 +546,11 @@ function renderBanners() {
   if (w.paused) b.push(`<div class="banner err">⏸ Đã dừng đọc ảnh: ${esc(w.paused)} <button class="link-btn" data-open-settings>Mở cài đặt</button></div>`);
   else if (w.ready) b.push(`<div class="banner warn">${esc(w.ready)} Ảnh sẽ chờ trong hàng đợi. <button class="link-btn" data-open-settings>Mở cài đặt</button></div>`);
   if (st.info && !st.info.db.ok) b.push(`<div class="banner warn">Không mở được ccts_tickets.db — vẫn đọc tem nhưng chưa đối chiếu được DB.</div>`);
+  const age = dayDiff(st.info?.db?.newest);
+  if (st.info?.db?.ok && age > 2 && !st.dbsync?.running) {
+    b.push(`<div class="banner warn">DB ticket cũ: ticket mới nhất ngày ${fmtDbTime(st.info.db.newest).slice(0, 10)} (${age} ngày trước) — tem mới sẽ không khớp được. <button class="link-btn" data-open-dbsync>⟳ Cập nhật DB</button></div>`);
+  }
+  if (st.dbsync?.running) b.push(`<div class="banner info"><i class="spin">◌</i> Đang cập nhật DB ticket từ web${st.dbsync.progress ? ` — trang ${st.dbsync.progress.page}/${st.dbsync.progress.pages}, +${st.dbsync.progress.new} ticket mới ở trang gần nhất` : "…"} <button class="link-btn" data-open-dbsync>Xem</button></div>`);
   if (uploading || pending) {
     b.push(`<div class="banner info"><i class="spin">◌</i> ${[uploading && `Đang gửi ${uploading} ảnh`, pending && `${pending} ảnh đang chờ/đang đọc`].filter(Boolean).join(" · ")}</div>`);
   }
@@ -588,6 +604,21 @@ function onEvent(ev) {
   if (ev.type === "worker") {
     st.worker = ev;
     renderBanners();
+  }
+  if (ev.type === "dbsync") {
+    const was = st.dbsync?.running;
+    st.dbsync = ev;
+    if (!$("#settings").hidden) renderDbSync();
+    if (was !== ev.running) renderBanners();
+    return;
+  }
+  if (ev.type === "dbsync_done") {
+    st.dbinfo = ev.db;
+    if (st.info) st.info.db = { ...st.info.db, newest: ev.db?.newest, count: ev.db?.count };
+    toast(`Đã cập nhật DB: ${Number(ev.db?.count || 0).toLocaleString("vi-VN")} ticket. Đối chiếu lại ${ev.rematched} dòng chưa khớp.`);
+    if (!$("#settings").hidden) renderDbSync();
+    renderBanners();
+    return;
   }
   if (ev.type === "tg") {
     st.tg = { current: ev.current, queue: ev.queue };
@@ -1110,15 +1141,11 @@ const ZOOM_MIN = 60, ZOOM_MAX = 130;
 function setZoom(pct) {
   const z = Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, Math.round(Number(pct) / 5) * 5 || 100));
   document.documentElement.style.setProperty("--grid-zoom", String(z / 100));
-  $("#zoomVal").textContent = `${z}%`;
   $("#setZoom").value = String(z);
   $("#setZoomVal").textContent = `${z}%`;
   pref.set("gridZoom", String(z));
   fitTable();
 }
-$("#zoomOut").onclick = () => setZoom(Number(pref.get("gridZoom", 100)) - 5);
-$("#zoomIn").onclick = () => setZoom(Number(pref.get("gridZoom", 100)) + 5);
-$("#zoomVal").onclick = () => setZoom(100);
 $("#setZoom").oninput = (e) => setZoom(e.target.value);
 document.addEventListener("keydown", (e) => {
   if (!(e.ctrlKey && e.altKey)) return;
@@ -1186,6 +1213,7 @@ $("#btnClearAll").onclick = async () => {
 document.addEventListener("click", (e) => {
   if (!e.target.closest("details.menu")) closeMenu();
   if (e.target.closest("[data-open-settings]")) openSettings();
+  if (e.target.closest("[data-open-dbsync]")) { closeMenu(); openSettings("db"); }
   if (e.target.closest("[data-close-modal]")) e.target.closest(".modal").hidden = true;
 });
 
@@ -1293,9 +1321,91 @@ function showProviderFields() {
   const p = $("#setProvider").value;
   document.querySelectorAll("#settings [data-provider]").forEach((el) => (el.hidden = !el.dataset.provider.split(" ").includes(p)));
 }
-async function openSettings() {
+function settingsTab(name) {
+  document.querySelectorAll("#settings [data-tab]").forEach((b) => b.classList.toggle("on", b.dataset.tab === name));
+  document.querySelectorAll("#settings [data-tabpane]").forEach((p) => (p.hidden = p.dataset.tabpane !== name));
+  if (name === "db") loadDbSync();
+}
+$("#settings").addEventListener("click", (e) => {
+  const t = e.target.closest("[data-tab]")?.dataset.tab;
+  if (t) settingsTab(t);
+});
+
+// ---------- Đồng bộ ccts_tickets.db từ web (⚙️ → Đồng bộ DB) ----------
+const dayDiff = (s) => (s ? Math.floor((Date.now() - new Date(s.replace(" ", "T")).getTime()) / 864e5) : null);
+const fmtDbTime = (s) => (s ? `${s.slice(8, 10)}/${s.slice(5, 7)}/${s.slice(0, 4)} ${s.slice(11, 16)}` : "—");
+
+async function loadDbSync() {
+  try {
+    const j = await API.get("api/dbsync");
+    st.dbsync = j;
+    st.dbinfo = j.db;
+  } catch (err) {
+    $("#dbInfo").textContent = err.message;
+  }
+  renderDbSync();
+}
+
+function renderDbSync() {
+  const s = st.dbsync ?? {};
+  const db = st.dbinfo ?? {};
+  const age = dayDiff(db.newest);
+  $("#dbInfo").innerHTML = db.ok
+    ? `DB: <b>${Number(db.count).toLocaleString("vi-VN")}</b> ticket · ticket mới nhất <b>${fmtDbTime(db.newest)}</b>${age != null ? ` <span class="${age > 2 ? "warn-text" : "ok-text"}">(${age <= 0 ? "hôm nay" : `${age} ngày trước`})</span>` : ""}`
+    : `<span class="err-text">Không đọc được DB ${esc(db.error || "")}</span>`;
+  const running = Boolean(s.running);
+  for (const id of ["#btnDbNew", "#btnDbProbe", "#btnDbAuto", "#btnDbFull", "#btnDbSave"]) $(id).disabled = running;
+  $("#btnDbStop").hidden = !running;
+  const p = s.progress;
+  $("#dbProg").hidden = !(running && p);
+  if (p) $("#dbProg i").style.width = `${Math.min(100, Math.round((100 * p.page) / Math.max(1, p.pages)))}%`;
+  const lines = s.lines ?? [];
+  $("#dbLog").hidden = !lines.length;
+  $("#dbLog").textContent = lines.slice(-14).join("\n");
+  $("#dbLog").scrollTop = $("#dbLog").scrollHeight;
+}
+
+function dbFields() {
+  const c = { cctsPageSize: Number($("#setCctsPage").value), cctsDelay: Number($("#setCctsDelay").value), cctsToolDir: $("#setCctsDir").value.trim() };
+  if ($("#setSso").value.trim()) c.cctsSso = $("#setSso").value.trim();
+  if ($("#setToken").value.trim()) c.cctsToken = $("#setToken").value.trim();
+  return c;
+}
+async function saveDb(quiet) {
+  const j = await API.post("api/config", dbFields());
+  cfg = j.config;
+  $("#setSso").value = $("#setToken").value = "";
+  fillDbFields();
+  if (!quiet) toast("Đã lưu cookie / token đồng bộ DB.");
+}
+function fillDbFields() {
+  if (!cfg) return;
+  $("#setSso").placeholder = cfg.cctsSsoHint ? `Đã lưu ${cfg.cctsSsoHint} — để trống để giữ nguyên` : "dán giá trị sau ssoticket=";
+  $("#setToken").placeholder = cfg.cctsTokenHint ? `Đã lưu ${cfg.cctsTokenHint} — để trống để giữ nguyên` : "dán giá trị token trong Payload";
+  $("#setCctsPage").value = String(cfg.cctsPageSize ?? 100);
+  $("#setCctsDelay").value = String(cfg.cctsDelay ?? 3);
+  $("#setCctsDir").value = cfg.cctsToolDir ?? "";
+}
+async function startDbSync(mode) {
+  if (mode === "full" && !confirm("Quét lại toàn bộ ~370.000 ticket từ trang 1 — có thể mất nhiều giờ. Tiếp tục?")) return;
+  try {
+    await saveDb(true);
+    await API.post("api/dbsync/start", { mode });
+    toast(mode === "probe" ? "Đang kiểm tra token…" : "Đang lấy dữ liệu từ web — theo dõi tiến độ bên dưới.");
+  } catch (err) { fail(err); }
+  loadDbSync();
+}
+$("#btnDbSave").onclick = () => saveDb(false).catch(fail);
+$("#btnDbProbe").onclick = () => startDbSync("probe");
+$("#btnDbNew").onclick = () => startDbSync("new");
+$("#btnDbAuto").onclick = () => startDbSync("auto");
+$("#btnDbFull").onclick = () => startDbSync("full");
+$("#btnDbStop").onclick = () => send("api/dbsync/stop").catch(() => {});
+
+async function openSettings(tab = "ai") {
   $("#settings").hidden = false;
   $("#setStatus").textContent = "";
+  settingsTab(tab);
   try {
     cfg = await API.get("api/config");
   } catch (err) {
@@ -1318,6 +1428,7 @@ async function openSettings() {
   showReadModeNote();
   $("#setConfirm").checked = cfg.aiConfirm !== false;
   showProviderFields();
+  fillDbFields();
 }
 function formConfig() {
   const c = {
@@ -1342,7 +1453,7 @@ function showReadModeNote() {
   document.querySelectorAll("#settings [data-readmode]").forEach((el) => (el.hidden = el.dataset.readmode !== $("#setReadMode").value));
 }
 $("#setReadMode").onchange = showReadModeNote;
-$("#btnSettings").onclick = openSettings;
+$("#btnSettings").onclick = () => openSettings();
 $("#btnTestKey").onclick = async () => {
   const s = $("#setStatus");
   s.className = "small muted";

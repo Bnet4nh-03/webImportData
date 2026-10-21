@@ -54,7 +54,7 @@ export function initSheet(o) {
     if (corner) {
       const h = document.createElement("i");
       h.className = "fillh";
-      h.title = "Kéo xuống để điền giống ô đang chọn";
+      h.title = "Kéo xuống để điền giống ô đang chọn · Nháy đúp: điền mọi ô TRỐNG bên dưới";
       corner.appendChild(h);
     }
   }
@@ -171,11 +171,46 @@ export function initSheet(o) {
     return grid.length ? write(srcEnd + 1, R.c0, grid) : null;
   }
 
+  /** Nháy đúp ô vuông góc: điền giá trị dòng cuối của vùng chọn vào mọi ô TRỐNG bên dưới (không ghi đè ô đã có). */
+  async function fillEmptyBelow() {
+    const R = rect();
+    if (!R) return;
+    if (tbody.contains(document.activeElement)) document.activeElement.blur();
+    const cols = o.cols();
+    const rows = o.rows();
+    const changes = [];
+    let n = 0;
+    for (let r = R.r1 + 1; r < rows.length; r++) {
+      const values = {};
+      for (let c = R.c0; c <= R.c1; c++) {
+        const col = cols[c];
+        const v = valueOf(rows[R.r1], col);
+        if (!col || col.readonly || !v || valueOf(rows[r], col)) continue;
+        values[col.key] = v;
+        n++;
+      }
+      if (Object.keys(values).length) changes.push({ id: rows[r].id, values });
+    }
+    if (!n) return o.toast("Không còn ô trống nào bên dưới.");
+    await o.apply(changes);
+    focus = { r: rows.length - 1, c: R.c1 };
+    paint();
+    o.toast(`Đã điền ${n} ô trống bên dưới.`);
+  }
+  let lastHandleDown = 0; // ô vuông bị vẽ lại sau mỗi lần nhả chuột nên tự đo nháy đúp
+
   // ---------- Chuột ----------
   tbody.addEventListener("mousedown", (e) => {
     if (e.button !== 0) return;
     if (e.target.closest(".fillh")) {
       e.preventDefault();
+      const now = Date.now();
+      if (now - lastHandleDown < 400) {
+        lastHandleDown = 0;
+        fillEmptyBelow().catch((err) => o.toast(err?.message || String(err), true));
+        return;
+      }
+      lastHandleDown = now;
       drag = "fill";
       fillTo = rect().r1;
       document.body.classList.add("sheet-drag");

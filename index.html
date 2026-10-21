@@ -42,10 +42,10 @@
     </section>
 
     <section class="toolbar">
-      <div id="filters" class="filters" role="tablist"></div>
       <div class="tools">
         <input id="search" type="search" placeholder="Tìm ticket, SN, trạm…" autocomplete="off">
-        <button id="btnSummary" class="btn" title="Tổng hợp theo loại Board: PASS / sửa xong / Discard / chưa xong">📊</button>
+        <button id="btnSummary" class="btn" title="Bộ lọc + tổng hợp theo loại Board (PASS / sửa xong / Discard / chưa xong)">📊 Tổng hợp</button>
+        <span id="filterBadge"></span>
         <button id="btnExport" class="btn primary" title="Xuất Excel (kèm sheet Tổng hợp)">⬇ Excel</button>
         <details class="menu">
           <summary class="btn" title="Thêm thao tác">⋯</summary>
@@ -54,17 +54,12 @@
             <button id="btnAddRow">＋ Thêm dòng nhập tay</button>
             <button id="btnAddCol">＋ Thêm cột riêng</button>
             <button id="btnCopy">⧉ Sao chép bảng (dán vào Excel)</button>
-            <div class="menu-row" title="Lưu trên máy này — Ctrl+Alt+= / Ctrl+Alt+−"><span>🔍 Cỡ bảng</span>
-              <span class="zoomctl">
-                <button type="button" class="btn sm" id="zoomOut" aria-label="Thu nhỏ bảng">−</button>
-                <button type="button" class="btn sm zoomval" id="zoomVal" title="Về 100%">100%</button>
-                <button type="button" class="btn sm" id="zoomIn" aria-label="Phóng to bảng">+</button>
-              </span></div>
             <label class="menu-check"><input type="checkbox" id="chkEdit"> Xoay / cắt ảnh trước khi gửi</label>
             <div class="menu-sec">Dữ liệu</div>
             <a href="api/photos.zip" download>🗂 Tải toàn bộ ảnh (.zip)</a>
             <button id="btnRematch">🔁 Đối chiếu lại DB cho tất cả</button>
             <button id="btnRetryErrors">↻ Đọc lại các ảnh lỗi</button>
+            <button data-open-dbsync>🗄 Cập nhật DB ticket từ web</button>
             <div class="menu-sec">Màu ô</div>
             <div class="legend">
               <span><i class="lg-uncertain"></i>AI chưa chắc</span>
@@ -79,7 +74,10 @@
       </div>
     </section>
 
-    <section id="summary" class="summary" hidden></section>
+    <section id="summary" class="summary" hidden>
+      <div id="filters" class="filters" role="tablist"></div>
+      <div id="sumBody"></div>
+    </section>
 
     <div class="table-wrap">
       <table id="grid"><thead></thead><tbody></tbody></table>
@@ -181,6 +179,11 @@
   <div id="settings" class="modal" hidden>
     <form class="modal-box" id="settingsForm">
       <div class="modal-head"><b>⚙️ Cài đặt</b><button type="button" class="icon-btn dark" data-close-modal>✕</button></div>
+      <div class="tabs" role="tablist">
+        <button type="button" class="tab on" data-tab="ai">🤖 Đọc tem</button>
+        <button type="button" class="tab" data-tab="db">🗄 Đồng bộ DB ticket</button>
+      </div>
+      <div data-tabpane="ai">
       <p class="note">Cài đặt lưu trên máy tính chạy server và dùng chung cho mọi thiết bị. Điện thoại không cần nhập key.</p>
       <label class="field">
         <span>AI đọc tem</span>
@@ -249,7 +252,41 @@
         <button type="button" class="btn danger-outline" id="btnDeleteKey" data-provider="gemini">Xóa key</button>
         <button type="submit" class="btn primary">Lưu</button>
       </div>
-    </form>
+          </div>
+      <div data-tabpane="db" hidden>
+        <div id="dbInfo" class="dbinfo muted small">Đang đọc DB…</div>
+        <p class="note">Lấy ticket mới từ web <b>console.cnpowercore.com</b> vào <code>ccts_tickets.db</code> để app khớp được tem mới.
+          Cách lấy 2 giá trị (khi hết hạn thì lấy lại): đăng nhập <b>console.cnpowercore.com</b> → <b>F12</b> → tab <b>Network</b> →
+          lọc <code>findCCTSTicket</code> → bấm vào request:<br>• <b>Headers → Cookie</b>: giá trị sau <code>ssoticket=</code><br>
+          • <b>Payload</b>: giá trị <code>token</code><br>Lưu trên máy tính chạy server (<code>data/config.json</code>), không gửi về điện thoại / trình duyệt.</p>
+        <label class="field"><span>Cookie ssoticket</span>
+          <input id="setSso" type="password" autocomplete="off" spellcheck="false"></label>
+        <label class="field"><span>API token</span>
+          <input id="setToken" type="password" autocomplete="off" spellcheck="false"></label>
+        <div class="grid2">
+          <label class="field"><span>Số ticket mỗi trang</span>
+            <select id="setCctsPage"><option>50</option><option>100</option><option>200</option><option>500</option></select></label>
+          <label class="field"><span>Nghỉ giữa các trang (giây)</span>
+            <input id="setCctsDelay" type="number" min="0" max="60" step="0.5"></label>
+        </div>
+        <details class="adv"><summary class="small muted">Nâng cao</summary>
+          <label class="field"><span>Thư mục tool lấy dữ liệu (có main.py)</span>
+            <input id="setCctsDir" autocomplete="off" spellcheck="false"></label></details>
+        <div class="actions left">
+          <button type="button" class="btn" id="btnDbSave">💾 Lưu</button>
+          <button type="button" class="btn" id="btnDbProbe" title="4 request thử, không ghi DB">Kiểm tra token</button>
+          <button type="button" class="btn primary" id="btnDbNew" title="Chỉ lấy ticket mới ở đầu danh sách (dùng hằng ngày)">⟳ Lấy ticket mới</button>
+          <button type="button" class="btn danger-outline" id="btnDbStop" hidden>⏹ Dừng</button>
+        </div>
+        <details class="adv"><summary class="small muted">Đồng bộ đầy đủ (lâu)</summary>
+          <div class="actions left">
+            <button type="button" class="btn sm" id="btnDbAuto" title="Tiếp tục quét từ chỗ lần trước dừng (cập nhật cả trạng thái ticket cũ)">Tiếp tục đồng bộ</button>
+            <button type="button" class="btn sm danger-outline" id="btnDbFull" title="Quét lại từ trang 1 — rất lâu">Quét lại toàn bộ</button>
+          </div></details>
+        <div id="dbProg" class="tgprog big" hidden><i></i></div>
+        <pre id="dbLog" class="dblog" hidden></pre>
+      </div>
+</form>
   </div>
 
   <!-- Xác nhận nhập lên bot Telegram -->
