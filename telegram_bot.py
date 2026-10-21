@@ -218,11 +218,26 @@ class Runner:
         self.timeout, self.poll = timeout, poll
         self.steps = plan_steps(job)
         self.done_steps: set[str] = set()
+        self.last_step = ""  # bước vừa làm (báo khi bot không phản hồi)
         self.final = False  # đã thao tác ở bước cuối → có thể đã tạo record
         self.pending: list[str] = []
         self.photo_kind = ""
 
     # --- tiện ích ---
+    def drain(self, cursor: int) -> int:
+        """Đợi các tin muộn của phiên trước (vd bot trả lời lệnh hủy) rồi mới bắt đầu: tin tới trong lúc này bị bỏ qua.
+        Im lặng 1,5 s (tối đa 4 s) với thời gian chờ bot mặc định 45 s."""
+        quiet, limit = min(1.5, self.timeout / 30), min(4.0, self.timeout / 10)
+        end, still = time.monotonic() + limit, time.monotonic() + quiet
+        while time.monotonic() < min(end, still):
+            msgs = self.d.messages_after(cursor)
+            if msgs:
+                cursor = max(m["mid"] for m in msgs)
+                still = time.monotonic() + quiet
+                self.log(f"Bỏ qua {len(msgs)} tin tồn của phiên trước.")
+            time.sleep(min(self.poll, 0.3))
+        return cursor
+
     def check_stop(self) -> None:
         """Gọi trước mỗi thao tác trên bot: dừng trước bước cuối thì chưa có record nào được tạo."""
         if self.should_stop():
@@ -234,6 +249,7 @@ class Runner:
         keys = [k for k, _ in self.steps]
         n = keys.index(key) + 1 if key in keys else len(self.done_steps)
         name = dict(self.steps).get(key, key)
+        self.last_step = key
         self.progress({"step": key, "label": name, "n": n, "total": len(self.steps), "detail": detail})
         self.log(f"[{n}/{len(self.steps)}] {name}{': ' + detail if detail else ''}")
 
@@ -353,21 +369,32 @@ class Runner:
             raise BotError(" ".join(errs))
         self.check_stop()
         self.d.open_chat()
-        cursor = self.d.last_mid()
+        cursor = self.drain(self.d.last_mid())
         self.log(f"Bắt đầu, tin cuối trong chat: {cursor}")
         self.check_stop()
         self.d.send_text("/repair")
         self.report("menu", "/repair")
         deadline = time.monotonic() + self.timeout
+        nudged = False
         try:
             while True:
                 self.check_stop()
                 msgs = [m for m in self.d.messages_after(cursor) if not m["out"]]
                 if not msgs:
-                    if time.monotonic() > deadline:
+                    left = deadline - time.monotonic()
+                    if not nudged and left < self.timeout / 2 and hasattr(self.d, "nudge"):
+                        nudged = True  # nửa thời gian chưa thấy bot: làm tỉnh trang Telegram (vẽ lại tin mới) một lần
+                        self.log("Chưa thấy bot trả lời — làm mới trang Telegram…")
+                        self.d.nudge()
+                        continue
+                    if left < 0:
+                        where = dict(self.steps).get(self.last_step, self.last_step) or "mở menu"
+                        diag = self.d.diagnose() if hasattr(self.d, "diagnose") else ""
+                        if diag:
+                            self.log(f"Chẩn đoán: {diag}")
                         if self.final:
                             raise BotError("Bot không trả lời sau bước cuối — có thể ĐÃ tạo record. Kiểm tra chat trước khi nhập lại.", True)
-                        raise BotError(f"Bot không phản hồi sau {int(self.timeout)} giây.")
+                        raise BotError(f"Bot không phản hồi sau {int(self.timeout)} giây (sau bước: {where}).")
                     time.sleep(self.poll)
                     continue
                 for msg in msgs:
@@ -379,6 +406,9 @@ class Runner:
                         res.update(message_id=msg["mid"], text=msg["text"])
                         self.report("verify", f"Repair #{res['repair_id']} · {res['device_code'] or 'không có mã thiết bị'}")
                         return res
+                    if key in ("expired", "cancelled") and "menu" not in self.done_steps:
+                        self.log("Bỏ qua tin của phiên trước (bot trả lời muộn).")
+                        continue  # vd "❎ Đã hủy." của lần hủy dòng trước tới trễ: không làm hỏng dòng này
                     if key in ("expired", "admin", "cancelled"):
                         raise BotError(msg["text"].splitlines()[0], self.final)
                     if key in (None, "info"):
@@ -523,6 +553,10 @@ def find_edge() -> str:
 def edge_command(edge: str, cdp: str = DEFAULT_CDP) -> list[str]:
     port = cdp.rsplit(":", 1)[-1].strip("/")
     return [edge, f"--user-data-dir={PROFILE_DIR}", f"--remote-debugging-port={port}", "--no-first-run",
+            # Cửa sổ bot hay bị che / thu nhỏ: không cho Edge giảm tốc trang (đã đo: bị che -> ~1 khung hình/giây,
+            # Telegram Web chậm vẽ tin mới -> app tưởng bot im lặng, báo "Bot không phản hồi").
+            "--disable-backgrounding-occluded-windows", "--disable-renderer-backgrounding",
+            "--disable-background-timer-throttling",
             "--new-window", TG_URL]
 
 
@@ -546,11 +580,46 @@ class PlaywrightDriver:
         if not self.page:
             self.close()
             raise BotError("Edge đang mở nhưng không có tab web.telegram.org.")
+        self._keep_active()
         if check_login:
             state = page_state(self.page, 30)
             if state != "ready":
                 self.close()
                 raise BotError(LOGIN_MSG if state == "login" else "Telegram Web chưa tải xong sau 30 giây — kiểm tra mạng rồi thử lại.")
+
+    def _keep_active(self) -> None:
+        """Cho trang Telegram coi như đang hiện + được focus dù cửa sổ bot bị che / thu nhỏ / chạy nền,
+        để tin mới của bot vẫn được vẽ ra trang kịp thời (Edge mở trước khi có cờ chống giảm tốc vẫn được)."""
+        try:
+            s = self.page.context.new_cdp_session(self.page)
+            s.send("Emulation.setFocusEmulationEnabled", {"enabled": True})
+            s.send("Page.setWebLifecycleState", {"state": "active"})
+            self._cdp = s
+        except Exception:  # noqa: BLE001 - chỉ là tối ưu, không chặn việc nhập
+            self._cdp = None
+
+    def nudge(self) -> None:
+        """Bot im lặng quá lâu: áp lại 'đang hiện', cuộn xuống cuối chat để Telegram vẽ tin mới (không gửi gì lên bot)."""
+        self._keep_active()
+        try:
+            self.to_bottom()
+            self.page.wait_for_timeout(1500)
+        except Exception:  # noqa: BLE001
+            pass
+
+    def diagnose(self) -> str:
+        """Tình trạng trang khi bot 'im lặng' — ghi vào nhật ký để biết vì sao bị pending."""
+        try:
+            info = self.page.evaluate("""() => ({vis: document.visibilityState, focus: document.hasFocus(),
+                input: (document.querySelector('.input-message-input[contenteditable="true"]')?.innerText || '').trim().slice(0, 40),
+                popup: !!document.querySelector('.popup-new-media'), online: navigator.onLine})""")
+            last = self.last_bot_message() or {}
+            return (f"trang {info['vis']}{'' if info['focus'] else ' (không focus)'}, mạng {'có' if info['online'] else 'MẤT'}"
+                    f"{', còn popup gửi ảnh' if info['popup'] else ''}{', ô nhập còn chữ: ' + info['input'] if info['input'] else ''}"
+                    f" | tin cuối của bot #{last.get('mid')}: {str(last.get('text', ''))[:60]!r}"
+                    f" nút: {', '.join(labels(last))[:80] or '-'}")
+        except Exception as e:  # noqa: BLE001
+            return f"không đọc được trang: {e}"
 
     def close(self) -> None:
         try:

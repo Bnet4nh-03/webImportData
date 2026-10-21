@@ -603,7 +603,10 @@ class Store:
             hist = list(tg.get("history") or [])
             if tg.get("repairId"):
                 hist.append({k: tg.get(k) for k in ("repairId", "deviceCode", "at")})
-            r["tg"] = {"status": "queued", "at": int(time.time() * 1000), "log": [], "history": hist}
+            # Lần trước lỗi: giữ đuôi nhật ký lần đó để còn biết vì sao (trước đây lần nhập lại xoá mất).
+            prev = (tg.get("log") or [])[-15:] if tg.get("status") in ("error", "uncertain") else []
+            log = [*prev, "──── nhập lại ────"] if prev else []
+            r["tg"] = {"status": "queued", "at": int(time.time() * 1000), "log": log, "history": hist}
             self.emit_row(r)
         tgworker.push(rid)
 
@@ -625,7 +628,7 @@ class Store:
             r["tg"] = tg
             tg.update(fields)
             if log_line:
-                tg["log"] = (tg.get("log") or [])[-40:] + [time.strftime("%H:%M:%S ") + log_line]
+                tg["log"] = (tg.get("log") or [])[-90:] + [time.strftime("%H:%M:%S ") + log_line]
             self.emit_row(r)
 
     # ---------- Đọc tem bằng AI (gọi từ Worker) ----------
@@ -936,8 +939,10 @@ class TelegramWorker:
         except TG.BotError as e:
             status = "uncertain" if e.uncertain else "error"
             store.tg_update(rid, f"LỖI: {e}", status=status, error=str(e), stopping=False, at=int(time.time() * 1000))
+            with store.lock:
+                tail = list(((store.find(rid) or {}).get("tg") or {}).get("log") or [])[-8:]
             self.journal({"row": rid, "no": row_no, "event": "stopped" if isinstance(e, TG.Stopped) else status,
-                          "uncertain": e.uncertain, "error": str(e)})
+                          "uncertain": e.uncertain, "error": str(e), "log": tail})
             return
         except Exception as e:  # noqa: BLE001
             store.tg_update(rid, f"LỖI: {e}", status="error", error=f"Lỗi: {e}", at=int(time.time() * 1000))

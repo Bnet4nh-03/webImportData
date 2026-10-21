@@ -336,6 +336,59 @@ class TestSafety(Base):
             self.run_job(bot, self.job(), stop=lambda: True)[0].run()
         self.assertEqual(bot.sent, [])
 
+    def test_late_cancel_from_previous_row_is_ignored(self):
+        # Ca thật 21/10 17:43: dòng 5 hết giờ -> app hủy; "❎ Đã hủy." tới muộn, rơi vào phiên của dòng 6
+        bot = FakeBot()
+        orig = bot.send_text
+
+        def send_text(text):
+            orig(text)
+            if text == "/repair":  # tin hủy muộn của phiên trước tới ngay sau /repair, trước menu
+                bot.msgs.insert(-1, {"mid": bot.mid - 0.5, "out": False, "text": "❎ Đã hủy.", "kb": []})
+        bot.send_text = send_text
+        res = self.run_job(bot, self.job())[0].run()
+        self.assertEqual(res["repair_id"], "958")
+
+    def test_stale_messages_before_start_are_drained(self):
+        bot = FakeBot()
+        bot.bot("❎ Đã hủy.")  # tin tồn của phiên trước, có sẵn trước khi bắt đầu
+        late = []
+        orig = bot.messages_after
+
+        def messages_after(mid):
+            if not late:  # lần đọc đầu trong lúc dọn: bot gửi thêm 1 tin muộn
+                late.append(1)
+                bot.bot("⚠️ Phiên thêm Repair đã hết hạn hoặc không còn tồn tại")
+            return orig(mid)
+        bot.messages_after = messages_after
+        r, _ = self.run_job(bot, self.job(), timeout=0.6)
+        logs = []
+        r.log = logs.append
+        res = r.run()
+        self.assertEqual(res["repair_id"], "958")
+        self.assertTrue(any("tin tồn" in l for l in logs))
+
+    def test_timeout_reports_step_nudges_once_and_diagnoses(self):
+        bot = FakeBot()
+        orig = bot.answer
+
+        def answer(v):  # bot im lặng sau khi chọn nhà thầu
+            if bot.state == "contractor":
+                return
+            orig(v)
+        bot.answer = answer
+        calls = []
+        bot.nudge = lambda: calls.append("nudge")
+        bot.diagnose = lambda: "trang visible | tin cuối của bot #1: 'Chọn nhà thầu'"
+        r, _ = self.run_job(bot, self.job(), timeout=0.4)
+        logs = []
+        r.log = logs.append
+        with self.assertRaises(T.BotError) as cm:
+            r.run()
+        self.assertIn("sau bước: Nhà thầu", str(cm.exception))
+        self.assertEqual(calls, ["nudge"])
+        self.assertTrue(any(l.startswith("Chẩn đoán:") for l in logs))
+
     def test_parse_created_real_message(self):
         text = ("✅ Đã tạo Repair #957\n  Board: 12070000153\n  Thiết bị (code): 12070000153BO\n  Test tool result: PASS\n"
                 "  Ticket ID: 8PHKM4VCI1HC\n  ℹ️ Không tìm thấy qua API - các field ... đã được nhập thủ công.")
