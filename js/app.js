@@ -886,10 +886,17 @@ $("#drawer").addEventListener("click", async (e) => {
     case "tg": case "tg-cancel": case "copy-code":
       return rowAction(act, r, actEl);
     case "research": return loadCandidates();
-    case "rot":
+    case "rot": {
+      const reading = r.status === "queued" || r.status === "processing";
       actEl.disabled = true;
-      await send(`api/rows/${r.id}/rotate`, { deg: Number(actEl.dataset.deg) }).catch(() => {});
-      return toast("Đã xoay ảnh tem. Bấm ↻ Đọc lại để AI đọc theo chiều mới.");
+      try {
+        await send(`api/rows/${r.id}/rotate`, { deg: Number(actEl.dataset.deg) });
+      } catch {
+        actEl.disabled = false;
+        return;
+      }
+      return toast(reading ? "Đã xoay ảnh tem — sẽ tự đọc lại theo chiều mới." : "Đã xoay ảnh tem. Bấm ↻ Đọc lại để AI đọc theo chiều mới.");
+    }
     case "pin":
       pref.set("pinImg", pinImg() ? "0" : "1");
       return renderDrawer();

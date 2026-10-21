@@ -106,6 +106,30 @@ class TestReadMode(unittest.TestCase):
         self.store.run_ocr(r["id"])
         self.assertEqual(seen.get("rotPref"), 0)
 
+    def test_rotate_while_reading_requeues_and_old_read_is_dropped(self):
+        import io
+        from PIL import Image
+        S.IMAGES.mkdir(parents=True, exist_ok=True)
+        buf = io.BytesIO()
+        Image.new("RGB", (40, 20), "white").save(buf, "JPEG")
+        (S.IMAGES / "ireading.jpg").write_bytes(buf.getvalue())
+        r = self.store.new_row(image="ireading", status="processing")
+        self.store.rows.append(r)
+        pushed = []
+        S.worker.push = lambda rid, front=False: pushed.append((rid, front))
+        # Lần đọc đang chạy: trong lúc AI đọc ảnh cũ thì người dùng bấm xoay
+        def slow_read(cfg, jpeg, rid):
+            self.store.rotate_label(rid, 90)
+            return fake_result(False, self.sn), 0, "full"
+        self.store._read = slow_read
+        self.store.match = lambda rid: None
+        self.store.run_ocr(r["id"])
+        self.assertNotEqual(r["image"], "ireading")
+        self.assertEqual(r["status"], "queued")  # chờ đọc lại theo chiều mới, không bị lần đọc cũ ghi đè
+        self.assertEqual(pushed, [(r["id"], True)])
+        self.assertEqual(r.get("tem") or {}, {})  # kết quả của ảnh cũ bị bỏ
+        self.assertFalse((S.IMAGES / "ireading.jpg").exists())
+
     def test_detected_orientation_read_first(self):
         rots, orig = [], (ocr.rotate_jpeg, ocr.detect_orientation, ocr.can_rotate)
         ocr.rotate_jpeg = lambda jpeg, deg: rots.append(deg) or jpeg

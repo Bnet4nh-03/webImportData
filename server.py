@@ -528,8 +528,6 @@ class Store:
             raise ValueError("Cần thư viện Pillow để xoay ảnh: pip install pillow")
         with self.lock:
             r = self.need(rid)
-            if r["status"] == "processing":
-                raise ValueError("Đang đọc tem — chờ đọc xong rồi xoay.")
             old = r.get("image")
             if not old:
                 raise ValueError("Dòng này chưa có ảnh tem.")
@@ -537,8 +535,14 @@ class Store:
             atomic_write(IMAGES / f"{new}.jpg", ocr.rotate_jpeg((IMAGES / f"{old}.jpg").read_bytes(), deg % 360))
             r["image"] = new
             r["upright"] = True
+            # Đang chờ/đang đọc ảnh cũ: đọc lại theo chiều mới. Lần đọc đang chạy thấy ảnh đã đổi sẽ dừng, bỏ kết quả.
+            reread = r["status"] in ("queued", "processing")
+            if reread:
+                r["status"], r["error"], r["warn"] = "queued", "", "Đã xoay ảnh — sẽ đọc lại theo chiều mới."
             self.emit_row(r)
-        (IMAGES / f"{old}.jpg").unlink(missing_ok=True)
+        (IMAGES / f"{old}.jpg").unlink(missing_ok=True)  # lần đọc đang chạy đã nạp ảnh vào bộ nhớ từ trước
+        if reread:
+            worker.push(rid, front=True)
 
     def delete_photo(self, rid: str, img: str) -> None:
         with self.lock:
@@ -663,8 +667,8 @@ class Store:
                 break
             with self.lock:
                 r = self.find(rid)
-                if not r:
-                    break
+                if not r or (cfg.get("_img") and r.get("image") != cfg["_img"]):
+                    break  # dòng bị xoá / ảnh đã được xoay hoặc chụp lại: thôi thử các chiều còn lại
                 r["warn"] = f"Chưa khớp DB ở chiều {rot}°, đang xoay ảnh đọc lại…"
                 self.emit_row(r)
         pts, res, rot = best
@@ -712,6 +716,7 @@ class Store:
             if r.get("upright"):  # ảnh đã xoay đứng (tay hoặc lần đọc trước): thử chiều 0° trước, không xoay thêm
                 cfg["rotPref"] = 0
                 cfg["_upright"] = True
+            cfg["_img"] = img  # để dừng sớm nếu ảnh bị xoay / chụp lại trong lúc đọc
         t0 = time.time()
         rot = 0
         mode = "full"
@@ -721,8 +726,8 @@ class Store:
         except ocr.ExtractError as err:
             with self.lock:
                 r = self.find(rid)
-                if not r:
-                    return
+                if not r or r.get("image") != img:
+                    return  # ảnh đã xoay / chụp lại trong lúc đọc: lần đọc mới đã được xếp hàng
                 if err.fatal:
                     r["status"] = "queued"  # chờ sửa cài đặt rồi tự chạy tiếp
                     worker.pause(str(err))
@@ -734,7 +739,7 @@ class Store:
         except Exception as err:  # noqa: BLE001 - báo lỗi lên dòng
             with self.lock:
                 r = self.find(rid)
-                if r:
+                if r and r.get("image") == img:
                     r["status"], r["error"] = "error", f"Lỗi: {err}"
                     self.emit_row(r)
             return
