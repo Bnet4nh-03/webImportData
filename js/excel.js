@@ -1,4 +1,5 @@
 // Xuất .xlsx bằng SheetJS (biến toàn cục XLSX nạp từ index.html).
+import { summaryMatrix } from "./summary.js";
 
 function today() {
   const d = new Date();
@@ -34,6 +35,11 @@ export function exportXlsx(columns, rows) {
   });
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, "Broken Items");
+  // Sheet tổng hợp theo loại Board (cùng cách tính với bảng 📊 Tổng hợp trên web)
+  const [sh, sd] = summaryMatrix(rows);
+  const ws2 = XLSX.utils.aoa_to_sheet([sh, ...sd]);
+  ws2["!cols"] = sh.map((h, i) => ({ wch: i === 1 ? 44 : Math.max(10, h.length + 2) }));
+  XLSX.utils.book_append_sheet(wb, ws2, "Tổng hợp");
   const name = `broken_items_${today()}.xlsx`;
   XLSX.writeFile(wb, name);
   return name;

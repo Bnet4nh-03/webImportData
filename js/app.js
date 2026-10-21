@@ -4,6 +4,7 @@ import * as API from "./api.js";
 import * as IMG from "./image.js";
 import { exportXlsx, toTsv } from "./excel.js";
 import { initSheet } from "./sheet.js";
+import { SUMMARY_COLS, summarize } from "./summary.js";
 
 const $ = (sel, root = document) => root.querySelector(sel);
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
@@ -397,6 +398,45 @@ function cardHtml(r) {
   </div>`;
 }
 
+// ---------- Tổng hợp theo Board ----------
+const showSummary = () => pref.get("summary", "0") === "1";
+
+function renderSummary() {
+  const el = $("#summary");
+  el.hidden = !showSummary() || !st.rows.length;
+  $("#btnSummary").classList.toggle("on", showSummary());
+  if (el.hidden) return;
+  const list = visibleRows();
+  const { rows, total } = summarize(list);
+  const narrowed = list.length !== st.rows.length;
+  const cell = (g, c) => {
+    const v = g[c.key];
+    const pct = c.key !== "total" && g.total ? ` <small>${Math.round((100 * v) / g.total)}%</small>` : "";
+    return `<td class="n ${c.key} ${v ? "" : "zero"}">${v}${v && c.key !== "total" && c.key !== "imported" ? pct : ""}</td>`;
+  };
+  el.innerHTML = `<div class="sum-head"><b>📊 Tổng hợp theo Board</b>
+      <span class="muted small">${narrowed ? `theo bộ lọc / tìm kiếm hiện tại: ${list.length}/${st.rows.length} dòng` : `${st.rows.length} dòng`} · bấm tên Board để lọc bảng</span>
+      ${search ? `<button class="link-btn small" data-sum-clear>Bỏ lọc Board</button>` : ""}</div>
+    <div class="sum-wrap"><table class="sum">
+      <thead><tr><th>Board</th>${SUMMARY_COLS.map((c) => `<th class="n ${c.key}" title="${esc(c.tip || "")}">${esc(c.label)}</th>`).join("")}</tr></thead>
+      <tbody>${rows.map((g) => `<tr><td class="b"><button class="link-btn" data-sum-board="${esc(g.code)}" title="${esc(g.board)}"><b>${esc(g.code)}</b> ${esc(g.name)}</button></td>${SUMMARY_COLS.map((c) => cell(g, c)).join("")}</tr>`).join("")}</tbody>
+      <tfoot><tr><td class="b"><b>Tổng</b></td>${SUMMARY_COLS.map((c) => cell(total, c)).join("")}</tr></tfoot>
+    </table></div>`;
+}
+
+$("#btnSummary").onclick = () => {
+  pref.set("summary", showSummary() ? "0" : "1");
+  renderSummary();
+  fitTable();
+};
+$("#summary").addEventListener("click", (e) => {
+  const code = e.target.closest("[data-sum-board]")?.dataset.sumBoard;
+  if (code === undefined && !e.target.closest("[data-sum-clear]")) return;
+  search = code && code !== "(Chưa chọn Board)" ? code : "";
+  $("#search").value = search;
+  render();
+});
+
 // ---------- Vẽ ----------
 function render() {
   renderHead();
@@ -408,6 +448,7 @@ function render() {
   renderFilters();
   renderBanners();
   renderTgBar();
+  renderSummary();
   sheet.paint();
   if (list.length === 0 && st.rows.length) {
     $("#cards").innerHTML = `<p class="muted center">Không có dòng nào trong bộ lọc này.</p>`;
@@ -446,6 +487,7 @@ function updateRowDom(r) {
   renderFilters();
   renderBanners();
   renderTgBar();
+  renderSummary();
   sheet.paint();
 }
 
