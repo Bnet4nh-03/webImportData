@@ -630,6 +630,8 @@ for (const root of [$("#grid tbody"), $("#cards")]) {
 let candCache = { id: null, items: null, loading: false };
 
 const wide = () => matchMedia("(min-width: 821px)").matches;
+/** Ghim ảnh tem ở đầu ngăn chi tiết khi cuộn (mặc định bật, lưu trên máy này). */
+const pinImg = () => pref.get("pinImg", "1") === "1";
 const docked = () => $("#drawer").classList.contains("docked") && !$("#drawer").hidden;
 
 /** dock = true: khung cố định bên trái (ảnh + so sánh), bảng dời sang phải để vừa xem vừa sửa.
@@ -800,15 +802,21 @@ function renderDrawer() {
       <button class="icon-btn dark" data-close title="Đóng">✕</button>
     </div>
     <div class="dr-scroll">
-      <section class="dr-img">
+      <section class="dr-img ${r.image && pinImg() ? "pinned" : ""}">
         ${r.image ? `<img src="${API.imgUrl(r.image)}" data-act2="view" alt="Ảnh tem" title="Bấm để xem ảnh lớn">` : `<div class="noimg big">Chưa có ảnh tem</div>`}
         <div class="dr-img-btns">
           <button class="btn primary" data-act2="cam-label">📷 ${r.image ? "Chụp lại tem" : "Chụp tem"}</button>
           ${r.image ? `<button class="btn" data-act2="retry">↻ Đọc lại</button>` : ""}
+          ${r.image ? `<span class="rotbtns">
+            <button class="btn sm" data-act2="rot" data-deg="90" title="Xoay trái 90° (lưu ảnh, đọc lại sẽ theo chiều mới)">⟲</button>
+            <button class="btn sm" data-act2="rot" data-deg="270" title="Xoay phải 90°">⟳</button>
+            <button class="btn sm" data-act2="rot" data-deg="180" title="Xoay 180° (lộn ngược)">180°</button>
+            <button class="btn sm ${pinImg() ? "on" : ""}" data-act2="pin" title="${pinImg() ? "Bỏ ghim: ảnh cuộn theo nội dung" : "Ghim ảnh ở trên khi cuộn xuống nhập liệu"}">📌</button>
+          </span>` : ""}
           ${r.image && (r.readMode === "quick" || r.readMode === "codes") ? `<button class="btn" data-act2="retry-full" title="Đọc lại cả Ticket, Mã lỗi, Mô tả lỗi trên tem">↻ Đọc đầy đủ (cả Ticket)</button>` : ""}
         </div>
         ${r.error ? `<p class="err-text small">${esc(r.error)}</p>` : r.warn ? `<p class="warn-text small">⚠ ${esc(r.warn)}</p>` : ""}
-        ${r.tem?.model || r.ms ? `<p class="muted small">${[r.tem?.model && `Model trên tem: ${esc(r.tem.model)}`, r.readMode && { quick: "⚡ Đọc nhanh (Ticket lấy từ DB)", "quick+full": "⚡ Đọc nhanh không khớp DB → đã đọc đầy đủ", codes: "⚡ Đọc mã + ngày", full: "Đọc đầy đủ" }[r.readMode], r.ms && `AI đọc ${(r.ms / 1000).toFixed(1)}s`, r.confirm?.ms && `xác nhận ${(r.confirm.ms / 1000).toFixed(1)}s`].filter(Boolean).join(" · ")}</p>` : ""}
+        ${r.tem?.model || r.ms ? `<p class="muted small">${[r.tem?.model && `Model trên tem: ${esc(r.tem.model)}`, r.readMode && { quick: "⚡ Đọc nhanh (Ticket lấy từ DB)", "quick+full": "⚡ Đọc nhanh không khớp DB → đã đọc đầy đủ", codes: "⚡ Đọc mã + ngày", full: "Đọc đầy đủ" }[r.readMode], r.ms && `AI đọc ${(r.ms / 1000).toFixed(1)}s`, r.orient && (r.orient.sure ? `chiều tự nhận: xoay ${r.orient.deg}°` : "chiều: không tự nhận được"), r.confirm?.ms && `xác nhận ${(r.confirm.ms / 1000).toFixed(1)}s`].filter(Boolean).join(" · ")}</p>` : ""}
       </section>
 
       ${tgSection(r)}
@@ -878,6 +886,13 @@ $("#drawer").addEventListener("click", async (e) => {
     case "tg": case "tg-cancel": case "copy-code":
       return rowAction(act, r, actEl);
     case "research": return loadCandidates();
+    case "rot":
+      actEl.disabled = true;
+      await send(`api/rows/${r.id}/rotate`, { deg: Number(actEl.dataset.deg) }).catch(() => {});
+      return toast("Đã xoay ảnh tem. Bấm ↻ Đọc lại để AI đọc theo chiều mới.");
+    case "pin":
+      pref.set("pinImg", pinImg() ? "0" : "1");
+      return renderDrawer();
     case "retry-full": return send(`api/rows/${r.id}/retry`, { resetEdits: false, mode: "full" }).catch(() => {});
     case "auto": await send(`api/rows/${r.id}/match`, { pk: null }).catch(() => {}); return setTimeout(loadCandidates, 400);
     case "unlink": {
@@ -926,7 +941,24 @@ function showViewer() {
   $("#viewerCount").textContent = n > 1 ? `${viewer.i + 1} / ${n}` : "";
   $("#viewerPrev").hidden = $("#viewerNext").hidden = n < 2;
   $("#viewerDel").hidden = !viewer.rowId;
+  viewer.rot = 0;
+  rotateViewer(0);
 }
+/** Xoay ảnh đang xem (chỉ để xem, không lưu). Ảnh xoay ngang được thu cho vừa khung. */
+function rotateViewer(step) {
+  viewer.rot = ((viewer.rot ?? 0) + step + 360) % 360;
+  const img = $("#viewerImg");
+  const side = viewer.rot % 180 !== 0;
+  img.style.transform = viewer.rot ? `rotate(${viewer.rot}deg)` : "";
+  img.classList.toggle("sideways", side);
+}
+$("#viewerRotL").onclick = () => rotateViewer(-90);
+$("#viewerRotR").onclick = () => rotateViewer(90);
+document.addEventListener("keydown", (e) => {
+  if ($("#viewer").hidden || e.target.matches("input, textarea, select")) return;
+  if (e.key === "q" || e.key === "Q") rotateViewer(-90);
+  if (e.key === "e" || e.key === "E") rotateViewer(90);
+});
 $("#viewerPrev").onclick = () => { viewer.i = (viewer.i - 1 + viewer.imgs.length) % viewer.imgs.length; showViewer(); };
 $("#viewerNext").onclick = () => { viewer.i = (viewer.i + 1) % viewer.imgs.length; showViewer(); };
 $("#viewerClose").onclick = () => ($("#viewer").hidden = true);

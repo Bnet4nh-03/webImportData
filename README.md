@@ -156,7 +156,15 @@ Model Ollama lưu ở `D:\03_Temp\ollama\models` (biến môi trường người
 
 Cách app làm với model trên máy:
 - Prompt ngắn, trả JSON một dòng, ký tự phân vân ghi trong ngoặc vuông `A[0O]B` → model phải viết ít chữ hơn nên nhanh hơn. Giới hạn độ dài câu trả lời để model không bị lặp chữ vô tận.
-- Model nhỏ đọc rất kém khi ảnh bị xoay. App đọc theo chiều xoay của lần thành công trước (`rotPref` trong `data/config.json`); nếu kết quả không khớp gì trong DB, app xoay 90° và đọc lại. Ảnh đã xoay thẳng được lưu thay ảnh gốc. Cần thư viện Pillow (`pip install pillow`).
+- Model nhỏ đọc rất kém khi ảnh bị xoay. Thứ tự thử chiều:
+  1. **Tự nhận chiều tem, không gọi AI (~50 ms)**: tem đứng thẳng thì mực xanh (giá trị viết tay) nằm chéo xuống-phải so với mực đen
+     (tiêu đề + nhãn in sẵn). Đo trên tem thật (`python tools/eval_orientation.py`): đúng 60% số ca, **sai 0**, còn lại "không chắc"
+     (tem viết bút đen, tem mất tiêu đề) -> dùng cách cũ. Ảnh bo mạch không có tem: luôn "không chắc".
+  2. Nếu không chắc: chiều của lần thành công trước (`rotPref` trong `data/config.json`).
+  3. Không khớp DB thì xoay đọc lại (tối đa 3 lần). Ảnh đọc được được lưu ở chiều đứng; đọc lại sau đó không xoay thêm.
+  Cần Pillow + numpy (`pip install pillow numpy`).
+- **Xoay ảnh tay**: trong ngăn chi tiết / khung trái có nút ⟲ ⟳ 180° (lưu ảnh mới, bấm ↻ Đọc lại để AI đọc theo chiều mới);
+  trình xem ảnh lớn có ⟲ ⟳ (phím Q / E) chỉ để xem. Nút 📌 ghim ảnh tem ở trên cùng khi cuộn xuống nhập liệu (mặc định bật).
 - Model được giữ trong RAM 30 phút giữa các ảnh. Để **Số ảnh đọc song song = 1**.
 - Đối chiếu DB chịu được mã đọc sai nhiều: tìm cả các trạm có mã gần giống, chấm điểm theo phần ký tự trùng nhau.
 

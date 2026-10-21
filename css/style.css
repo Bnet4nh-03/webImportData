@@ -643,3 +643,23 @@ select optgroup { color: var(--muted); font-style: normal; }
   .drawer.docked .dr-scroll > section:has(#cands) { order: 3; }
   .drawer.docked .dr-scroll > section:has(.tgprog, .tgresult, .tglog), .drawer.docked .dr-scroll > section:has(h3 .pill) { order: 4; }
 }
+
+/* =====================================================================
+   Ảnh tem ghim ở đầu ngăn chi tiết / khung trái: cuộn xuống nhập liệu vẫn thấy ảnh. Nút xoay ảnh.
+   ===================================================================== */
+.dr-img.pinned { position: sticky; top: -14px; z-index: 6; box-shadow: 0 6px 12px -8px rgba(0,0,0,.45); }
+.dr-img.pinned img { max-height: 36vh; }
+.drawer.docked .dr-img.pinned { top: -8px; }
+.drawer.docked .dr-img.pinned img { max-height: 40vh; }
+.dr-img img { transition: opacity .15s; }
+.dr-img-btns { align-items: center; }
+.rotbtns { display: inline-flex; gap: 3px; margin-left: auto; }
+.rotbtns .btn { min-width: 32px; font-size: 15px; }
+.rotbtns .btn.on { background: var(--brand-soft); border-color: var(--brand-2); }
+@media (max-width: 820px) {
+  .dr-img.pinned { top: -10px; }
+  .dr-img.pinned img { max-height: 28vh; }
+}
+/* Trình xem ảnh lớn: xoay để xem */
+#viewerImg { transition: transform .2s ease; }
+#viewerImg.sideways { max-width: calc(100vh - 140px); max-height: 100vw; }

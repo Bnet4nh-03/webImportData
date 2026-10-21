@@ -6,6 +6,7 @@ Nhà cung cấp: Google Gemini (REST, có gói miễn phí) hoặc Ollama (model
 from __future__ import annotations
 
 import base64
+import math
 import json
 import re
 import time
@@ -479,6 +480,102 @@ def rotate_jpeg(jpeg: bytes, deg: int) -> bytes:
     out = io.BytesIO()
     im.convert("RGB").save(out, "JPEG", quality=90)
     return out.getvalue()
+
+
+def detect_orientation(jpeg: bytes, max_side: int = 480) -> dict:
+    """Đoán chiều tem KHÔNG cần gọi AI (vài chục ms).
+
+    Tem là bảng 2 cột: cột trái là nhãn in sẵn (mực ĐEN), cột phải là giá trị viết tay (thường mực XANH).
+    Tem đứng đúng chiều thì mực xanh nằm BÊN PHẢI mực đen. Đo hướng từ tâm mực đen tới tâm mực xanh trong vùng giấy
+    trắng -> góc cần xoay (ngược chiều kim đồng hồ, như rotate_jpeg) để tem đứng thẳng.
+    Trả {"deg": 0|90|180|270|None, "sure": bool, ...}. Không thấy tem/mực xanh (viết bút đen, giấy ghi tay) -> sure=False.
+    """
+    out = {"deg": None, "sure": False}
+    try:
+        import io
+        import numpy as np
+        from PIL import Image
+    except ImportError:
+        return {**out, "why": "thiếu numpy/Pillow"}
+    im = Image.open(io.BytesIO(jpeg)).convert("RGB")
+    im.thumbnail((max_side, max_side))
+    a = np.asarray(im).astype(np.int16)
+    mx, mn = a.max(-1), a.min(-1)
+    lum, sat = a.mean(-1), mx - mn
+    # 1) Vùng giấy: sáng, ít màu; lấy mảng liền lớn nhất trên lưới thô.
+    thr = max(150.0, float(np.percentile(lum, 75)) - 20)
+    paper = (lum >= thr) & (sat < 50)
+    box = _largest_box(paper, cell=8)
+    if not box:
+        return {**out, "why": "không thấy vùng giấy"}
+    y0, y1, x0, x1 = box
+    h, w = y1 - y0, x1 - x0
+    if h * w < 0.02 * paper.size:
+        return {**out, "why": "vùng giấy quá nhỏ"}
+    # thu vào 4% để bỏ mép bo mạch / bóng đổ
+    y0, y1, x0, x1 = y0 + h // 25, y1 - h // 25, x0 + w // 25, x1 - w // 25
+    sub = a[y0:y1, x0:x1]
+    r, g, b = sub[..., 0], sub[..., 1], sub[..., 2]
+    s_l, s_mx, s_sat = lum[y0:y1, x0:x1], mx[y0:y1, x0:x1], sat[y0:y1, x0:x1]
+    blue = (b - np.maximum(r, g) > 22) & (s_l < 205)
+    black = (s_mx < 105) & (s_sat < 45)
+    n = sub.shape[0] * sub.shape[1]
+    nb, nk = int(blue.sum()), int(black.sum())
+    out.update(blue=round(nb / n, 4), black=round(nk / n, 4))
+    if nb < 0.003 * n or nk < 0.003 * n:
+        return {**out, "why": "thiếu mực xanh hoặc chữ in đen"}
+    ys, xs = np.mgrid[0:sub.shape[0], 0:sub.shape[1]]
+    # tâm mực, chuẩn hoá theo kích thước vùng giấy (0..1)
+    bx, by = xs[blue].mean() / sub.shape[1], ys[blue].mean() / sub.shape[0]
+    kx, ky = xs[black].mean() / sub.shape[1], ys[black].mean() / sub.shape[0]
+    vx, vy = float(bx - kx), float(by - ky)
+    # Tem đứng thẳng: mực đen nhiều nhất là dòng tiêu đề in đậm ở TRÊN + cột nhãn bên TRÁI, nên mực xanh nằm
+    # chéo XUỐNG-PHẢI so với mực đen (góc tính theo ảnh, y hướng xuống).
+    # Xoay ảnh d độ ngược chiều kim đồng hồ làm góc này giảm d -> chọn d (bội 90) đưa góc về gần hướng chuẩn nhất.
+    theta = math.degrees(math.atan2(vy, vx))
+    deg = int(round((theta - UPRIGHT_ANGLE) / 90)) * 90 % 360
+    off = abs((theta - UPRIGHT_ANGLE - deg + 180) % 360 - 180)
+    out.update(deg=deg, angle=round(theta), off=round(off),
+               sure=bool(math.hypot(vx, vy) >= 0.05 and off <= ORIENT_MAX_OFF and nb >= 0.01 * n))
+    return out
+
+
+UPRIGHT_ANGLE = 50  # hướng mực đen -> mực xanh khi tem đứng thẳng (đo trên 12 tem thật: -2°..98°, TB ~53°)
+ORIENT_MAX_OFF = 35  # lệch quá mức này so với hướng chuẩn -> "không chắc", để AI thử các chiều như cũ
+
+
+def _largest_box(mask, cell: int = 8):
+    """Khung bao của mảng True liền lớn nhất (tính trên lưới ô cell×cell để nhanh). -> (y0, y1, x0, x1) | None."""
+    from collections import deque
+    import numpy as np
+    H, W = mask.shape
+    gh, gw = H // cell, W // cell
+    if not gh or not gw:
+        return None
+    grid = mask[: gh * cell, : gw * cell].reshape(gh, cell, gw, cell).mean(axis=(1, 3)) > 0.5
+    seen = np.zeros_like(grid)
+    best = None
+    for sy in range(gh):
+        for sx in range(gw):
+            if not grid[sy, sx] or seen[sy, sx]:
+                continue
+            q = deque([(sy, sx)])
+            seen[sy, sx] = True
+            cnt, y0, y1, x0, x1 = 0, sy, sy, sx, sx
+            while q:
+                y, x = q.popleft()
+                cnt += 1
+                y0, y1, x0, x1 = min(y0, y), max(y1, y), min(x0, x), max(x1, x)
+                for ny, nx in ((y + 1, x), (y - 1, x), (y, x + 1), (y, x - 1)):
+                    if 0 <= ny < gh and 0 <= nx < gw and grid[ny, nx] and not seen[ny, nx]:
+                        seen[ny, nx] = True
+                        q.append((ny, nx))
+            if not best or cnt > best[0]:
+                best = (cnt, y0, y1, x0, x1)
+    if not best:
+        return None
+    _, y0, y1, x0, x1 = best
+    return y0 * cell, (y1 + 1) * cell, x0 * cell, (x1 + 1) * cell
 
 
 def can_rotate() -> bool:

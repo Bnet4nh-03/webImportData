@@ -506,6 +506,7 @@ class Store:
                     self.rows.append(r)
                 old = r.get("image")
                 r["image"] = img
+                r["upright"] = False  # ảnh tem mới: chưa biết chiều
                 if run_ocr:
                     r["status"] = "queued"
                     r["error"] = ""
@@ -517,6 +518,27 @@ class Store:
         if kind == "label" and run_ocr:
             worker.push(r["id"])
         return r
+
+    def rotate_label(self, rid: str, deg: int) -> None:
+        """Xoay ảnh tem (độ, ngược chiều kim đồng hồ) và lưu thành ảnh mới (tên ảnh không đổi nội dung -> cache web).
+        Ảnh đã xoay đứng: lần đọc sau không xoay thêm theo chiều đã học (rotPref)."""
+        if deg % 360 not in (90, 180, 270):
+            raise ValueError("Góc xoay không hợp lệ.")
+        if not ocr.can_rotate():
+            raise ValueError("Cần thư viện Pillow để xoay ảnh: pip install pillow")
+        with self.lock:
+            r = self.need(rid)
+            if r["status"] == "processing":
+                raise ValueError("Đang đọc tem — chờ đọc xong rồi xoay.")
+            old = r.get("image")
+            if not old:
+                raise ValueError("Dòng này chưa có ảnh tem.")
+            new = uid("i")
+            atomic_write(IMAGES / f"{new}.jpg", ocr.rotate_jpeg((IMAGES / f"{old}.jpg").read_bytes(), deg % 360))
+            r["image"] = new
+            r["upright"] = True
+            self.emit_row(r)
+        (IMAGES / f"{old}.jpg").unlink(missing_ok=True)
 
     def delete_photo(self, rid: str, img: str) -> None:
         with self.lock:
@@ -622,8 +644,17 @@ class Store:
         if cfg.get("provider") != "ollama" or not ocr.can_rotate():
             return ocr.extract(cfg, jpeg), 0
         pref = int(cfg.get("rotPref") or 0)
+        order = [pref, (pref + 90) % 360, (pref + 270) % 360]
+        # Tự nhận chiều tem (không gọi AI, ~50 ms): chắc chắn thì đọc chiều đó trước -> tránh lần đọc sai chiều (~70 s).
+        det = ocr.detect_orientation(jpeg) if not cfg.get("_upright") else {"deg": 0, "sure": True, "why": "ảnh đã xoay đứng"}
+        if det.get("sure"):
+            order = [det["deg"]] + [x for x in (pref, (pref + 90) % 360, (pref + 270) % 360, (pref + 180) % 360) if x != det["deg"]][:2]
+        with self.lock:
+            r = self.find(rid)
+            if r:
+                r["orient"] = {k: det.get(k) for k in ("deg", "sure", "why", "off")}
         best = None
-        for rot in (pref, (pref + 90) % 360, (pref + 270) % 360):
+        for rot in order:
             res = ocr.extract(cfg, ocr.rotate_jpeg(jpeg, rot))
             pts = self._plausible(res, cfg["dateFormat"])
             if not best or pts > best[0]:
@@ -637,8 +668,8 @@ class Store:
                 r["warn"] = f"Chưa khớp DB ở chiều {rot}°, đang xoay ảnh đọc lại…"
                 self.emit_row(r)
         pts, res, rot = best
-        if pts >= 50 and rot != pref:
-            self.config["rotPref"] = rot  # lần sau thử chiều này trước
+        if pts >= 50 and rot != pref and not det.get("sure"):
+            self.config["rotPref"] = rot  # lần sau thử chiều này trước (chỉ học khi không tự nhận được chiều)
             self.save_config()
         return res, rot
 
@@ -678,6 +709,9 @@ class Store:
             cfg = dict(self.config)
             if r.get("readModeNext"):  # "Đọc đầy đủ" cho riêng dòng này
                 cfg["readMode"] = r.pop("readModeNext")
+            if r.get("upright"):  # ảnh đã xoay đứng (tay hoặc lần đọc trước): thử chiều 0° trước, không xoay thêm
+                cfg["rotPref"] = 0
+                cfg["_upright"] = True
         t0 = time.time()
         rot = 0
         mode = "full"
@@ -718,6 +752,7 @@ class Store:
                 return  # bị xóa / chụp lại trong lúc đọc
             if new_img:
                 r["image"] = new_img
+                r["upright"] = True  # đã lưu ảnh xoay đứng: đọc lại không xoay thêm
                 (IMAGES / f"{img}.jpg").unlink(missing_ok=True)
             self._revert(r, keep_manual=True)
             r["tem"] = {k: f["value"] for k, f in mapped.items()}
@@ -1130,6 +1165,8 @@ class Handler(SimpleHTTPRequestHandler):
                     store.use_value(rid, str(body.get("key")), str(body.get("source")))
                 elif act == "photodel":
                     store.delete_photo(rid, str(body.get("img")))
+                elif act == "rotate":
+                    store.rotate_label(rid, int(body.get("deg") or 0))
                 elif act == "tg":
                     store.tg_enqueue(rid, bool(body.get("force")))
                 elif act == "tgcancel":

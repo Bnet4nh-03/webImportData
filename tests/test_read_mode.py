@@ -81,6 +81,65 @@ class TestReadMode(unittest.TestCase):
         self.store.patch(r["id"], {"values": {"ticket_id": "8ABCDEF12345"}, "commit": True})
         self.assertEqual((r["values"]["ticket_id"], rematched), ("8ABCDEF12345", []))  # nhập tay: không đối chiếu lại
 
+    def test_rotate_label_saves_new_image_and_reads_upright(self):
+        import io
+        from PIL import Image
+        S.IMAGES.mkdir(parents=True, exist_ok=True)
+        buf = io.BytesIO()
+        Image.new("RGB", (40, 20), "white").save(buf, "JPEG")
+        (S.IMAGES / "iold.jpg").write_bytes(buf.getvalue())
+        r = self.store.new_row(image="iold", status="done")
+        self.store.rows.append(r)
+        self.store.rotate_label(r["id"], 90)
+        self.assertNotEqual(r["image"], "iold")
+        self.assertFalse((S.IMAGES / "iold.jpg").exists())
+        self.assertEqual(Image.open(S.IMAGES / f"{r['image']}.jpg").size, (20, 40))
+        self.assertTrue(r["upright"])
+        with self.assertRaises(ValueError):
+            self.store.rotate_label(r["id"], 45)
+        # Đọc lại ảnh đã đứng: không xoay thêm theo chiều đã học (rotPref)
+        seen = {}
+        self.store.config.update(rotPref=90, readMode="full")
+        self.store._read = lambda cfg, jpeg, rid: seen.update(cfg) or (fake_result(False, self.sn), 0, "full")
+        self.store.match = lambda rid: None
+        r["status"] = "queued"
+        self.store.run_ocr(r["id"])
+        self.assertEqual(seen.get("rotPref"), 0)
+
+    def test_detected_orientation_read_first(self):
+        rots, orig = [], (ocr.rotate_jpeg, ocr.detect_orientation, ocr.can_rotate)
+        ocr.rotate_jpeg = lambda jpeg, deg: rots.append(deg) or jpeg
+        ocr.can_rotate = lambda: True
+        try:
+            r = self.store.new_row(image="i1")
+            self.store.rows.append(r)
+            cfg = {"provider": "ollama", "rotPref": 90, "dateFormat": "mdy", "readMode": "full"}
+            # nhận chiều chắc chắn 270 -> đọc 270 trước, khớp ngay -> 1 lần đọc
+            ocr.detect_orientation = lambda jpeg: {"deg": 270, "sure": True}
+            self.store._plausible = lambda res, fmt: 60
+            self.assertEqual(self.store._read_label(cfg, b"", r["id"]), (fake_result(False, self.sn), 270))
+            self.assertEqual(rots, [270])
+            self.assertEqual(r["orient"]["deg"], 270)
+            # đọc sai chiều (không khớp DB) -> vẫn thử các chiều khác, tối đa 3 lần
+            rots.clear()
+            self.store._plausible = lambda res, fmt: 0
+            self.store._read_label(cfg, b"", r["id"])
+            self.assertEqual(len(rots), 3)
+            self.assertEqual(rots[0], 270)
+            # không chắc -> thứ tự cũ theo chiều đã học
+            rots.clear()
+            ocr.detect_orientation = lambda jpeg: {"deg": None, "sure": False}
+            self.store._plausible = lambda res, fmt: 60
+            self.store._read_label(cfg, b"", r["id"])
+            self.assertEqual(rots, [90])
+            # ảnh đã xoay đứng -> không chạy nhận chiều, đọc 0° trước
+            rots.clear()
+            ocr.detect_orientation = lambda jpeg: self.fail("không được gọi khi ảnh đã đứng")
+            self.store._read_label({**cfg, "rotPref": 0, "_upright": True}, b"", r["id"])
+            self.assertEqual(rots, [0])
+        finally:
+            ocr.rotate_jpeg, ocr.detect_orientation, ocr.can_rotate = orig
+
     def test_codes_mode_reads_once_without_fallback(self):
         self.sn = "999999999999"  # dù SN không khớp DB: đã đọc Ticket nên không đọc lại đầy đủ
         res, rot, mode = self.store._read({"readMode": "codes", "dateFormat": "mdy"}, b"", "r1")
