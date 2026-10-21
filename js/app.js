@@ -172,15 +172,41 @@ function renderTgBar() {
     : "";
   const pct = rows.length ? Math.round((100 * done) / rows.length) : 0;
   const busy = Boolean(st.tg.current || st.tg.queue?.length || queued || rows.some((r) => r.tg?.status === "running"));
+  // Gọn: tiến độ + trạng thái Telegram nằm ở nút nhỏ 📤 trên thanh tiêu đề; thanh chi tiết chỉ hiện khi đang nhập.
+  $("#tgpillCount").textContent = `${done}/${rows.length}`;
+  const dot = busy ? "busy" : bad ? "bad" : !c ? "" : c.telegram ? "on" : "off";
+  $("#tgpillDot").className = "dot " + dot;
+  $("#tgpill").title = [
+    `Nhập bot PCBA-CCVN: ${done}/${rows.length} dòng đã nhập${queued ? `, ${queued} chờ` : ""}${bad ? `, ${bad} lỗi (bấm để xem)` : ""}`,
+    !c ? "Đang kiểm tra Telegram…" : c.telegram ? "Telegram Web sẵn sàng" : `${c.edge ? "Edge mở nhưng chưa có tab Telegram" : "Chưa mở Edge cho bot"} — bấm để mở`,
+    c && !c.playwright ? "Thiếu Playwright: pip install playwright" : "",
+  ].filter(Boolean).join("\n");
+  $("#tglineFill").style.width = `${pct}%`;
+  el.hidden = !busy;
   el.classList.toggle("busy", busy);
-  el.innerHTML = `<div class="tgbar-head">
-      <span class="tgbar-title">📤 Nhập bot PCBA-CCVN</span>${conn}${warn}
-      <span class="grow"></span>${busy ? stopBtn() : ""}
-      <span class="tgcount"><b>${done}</b>/${rows.length} dòng đã nhập${queued ? ` · ${queued} chờ` : ""}${bad ? ` · <button class="link-btn err-text" data-filter="tgtodo">${bad} cần xem</button>` : ""}</span>
-    </div>
-    <div class="tgprog total" title="${done}/${rows.length} dòng đã có mã thiết bị"><i style="width:${pct}%"></i></div>
-    ${job}`;
+  el.innerHTML = busy
+    ? `<div class="tgbar-head"><span class="tgbar-title">📤 Đang nhập bot</span>${conn}${warn}
+        <span class="tgcount">${queued ? `${queued} dòng chờ` : ""}</span><span class="grow"></span>${stopBtn()}</div>${job}`
+    : "";
 }
+
+$("#tgpill").onclick = async () => {
+  const c = st.tgConn;
+  const bad = st.rows.some((r) => r.tg?.status === "error" || r.tg?.status === "uncertain");
+  if (c && !c.telegram) {
+    toast("Đang mở Telegram Web cho bot…");
+    try {
+      const j = await API.post("api/tg/ensure");
+      toast(j.ready ? "Telegram Web sẵn sàng." : j.message || "Chưa mở được Telegram Web.", !j.ready);
+    } catch (err) { fail(err); }
+    return refreshTgStatus();
+  }
+  const todo = st.rows.filter((r) => r.tg?.status !== "done").length;
+  if (!todo && filter !== "tgtodo") return toast(`Cả ${st.rows.length} dòng đã nhập bot.`);
+  filter = filter === "tgtodo" && !bad ? "all" : "tgtodo";
+  pref.set("filter", filter);
+  render();
+};
 
 async function refreshTgStatus() {
   try {
@@ -492,8 +518,11 @@ function updateRowDom(r) {
 }
 
 function renderFilters() {
+  const all = st.rows.length;
+  // Gọn: ẩn bộ lọc đang bằng 0 hoặc trùng "Tất cả" (vd "Đã nhập bot 23/23"), trừ bộ lọc đang chọn.
   $("#filters").innerHTML = FILTERS.map((f) => {
     const n = st.rows.filter(f.test).length;
+    if (f.key !== "all" && filter !== f.key && (n === 0 || n === all)) return "";
     return `<button role="tab" class="chip ${filter === f.key ? "on" : ""} ${f.key}" data-filter="${f.key}">${f.label}<b>${n}</b></button>`;
   }).join("");
 }
@@ -516,8 +545,8 @@ function renderSync() {
   const el = $("#sync");
   const n = st.devices.length;
   el.className = "sync " + (st.connected ? "on" : "off");
-  el.innerHTML = st.connected ? `● <span class="sync-long">Đồng bộ · </span>${n} thiết bị` : "● Mất kết nối";
-  el.title = st.devices.join("\n");
+  el.innerHTML = st.connected ? `● ${n}` : "● Mất kết nối";
+  el.title = st.connected ? `Đồng bộ · ${n} thiết bị đang mở:\n${st.devices.join("\n")}` : "Mất kết nối tới máy tính chạy server";
 }
 
 // ---------- Nhận thay đổi từ server ----------
@@ -1120,6 +1149,7 @@ $("#filters").addEventListener("click", (e) => {
 $("#search").addEventListener("input", (e) => { search = e.target.value; render(); });
 
 $("#btnAddRow").onclick = async () => {
+  closeMenu();
   try {
     const j = await API.post("api/rows", {});
     setTimeout(() => openDrawer(j.id), 150);
@@ -1134,6 +1164,7 @@ $("#btnExport").onclick = () => {
   try { toast(`Đã tạo ${exportXlsx(columns(), st.rows)}`); } catch (err) { fail(err); }
 };
 $("#btnCopy").onclick = async () => {
+  closeMenu();
   if (!st.rows.length) return toast("Chưa có dữ liệu.");
   try {
     await navigator.clipboard.writeText(toTsv(columns(), st.rows));
@@ -1170,7 +1201,7 @@ function openColModal(col) {
   $("#colModal").hidden = false;
   $("#colName").focus();
 }
-$("#btnAddCol").onclick = () => openColModal(null);
+$("#btnAddCol").onclick = () => { closeMenu(); openColModal(null); };
 $("#colForm").onsubmit = async (e) => {
   e.preventDefault();
   const label = $("#colName").value.trim();

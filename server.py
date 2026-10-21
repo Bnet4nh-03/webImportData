@@ -1292,6 +1292,42 @@ worker = Worker()
 tgworker = TelegramWorker()
 
 
+_data_lock = None  # giữ file khoá suốt thời gian server chạy
+
+
+def lock_data_dir(data: Path) -> None:
+    """Chỉ MỘT server được dùng một thư mục data/. Hai server cùng chạy sẽ ghi đè state.json của nhau
+    (đã xảy ra 21/10: xoay ảnh xong thì server kia ghi lại tên ảnh cũ -> 3 ảnh tem bị mất).
+    Khoá tự nhả khi tiến trình kết thúc, kể cả bị tắt đột ngột."""
+    global _data_lock
+    data.mkdir(parents=True, exist_ok=True)
+    f = open(data / ".server.lock", "a+")
+    try:
+        f.seek(0)
+        if os.name == "nt":
+            import msvcrt
+            msvcrt.locking(f.fileno(), msvcrt.LK_NBLCK, 1)
+        else:
+            import fcntl
+            fcntl.flock(f.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        f.close()
+        print(f"\n  ✖ Đã có một server khác đang chạy với thư mục dữ liệu {data}.\n"
+              f"    Hai server cùng lúc sẽ ghi đè dữ liệu của nhau. Tắt cửa sổ server kia (Ctrl+C) rồi chạy lại.\n", flush=True)
+        sys.exit(1)
+    _data_lock = f
+
+
+class ExclusiveHTTPServer(ThreadingHTTPServer):
+    """Không cho tiến trình khác chiếm chung cổng (Windows mặc định cho phép khi bật SO_REUSEADDR)."""
+    allow_reuse_address = os.name != "nt"
+
+    def server_bind(self):
+        if os.name == "nt" and hasattr(socket, "SO_EXCLUSIVEADDRUSE"):
+            self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+        super().server_bind()
+
+
 def main() -> None:
     global index, store, DATA, IMAGES
     for stream in (sys.stdout, sys.stderr):  # console Windows mặc định không in được tiếng Việt
@@ -1310,6 +1346,7 @@ def main() -> None:
     if args.data:
         DATA = Path(args.data).resolve()
         IMAGES = DATA / "images"
+    lock_data_dir(DATA)  # trước khi đọc state.json: không cho server thứ hai chạy cùng thư mục
     index = M.TicketIndex(args.db)
     if index.ok:
         index.ensure()
@@ -1332,7 +1369,11 @@ def main() -> None:
     Handler.port = args.port
     Handler.lan = not args.local
     host = "127.0.0.1" if args.local else "0.0.0.0"
-    server = ThreadingHTTPServer((host, args.port), partial(Handler, directory=str(ROOT)))
+    try:
+        server = ExclusiveHTTPServer((host, args.port), partial(Handler, directory=str(ROOT)))
+    except OSError as e:
+        print(f"\n  ✖ Cổng {args.port} đang được chương trình khác dùng ({e}). Tắt server kia hoặc dùng --port khác.\n", flush=True)
+        sys.exit(1)
     server.daemon_threads = True
     print(f"\n  Máy tính:   http://localhost:{args.port}", flush=True)
     if not args.local:

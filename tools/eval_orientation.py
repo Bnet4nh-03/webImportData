@@ -22,7 +22,8 @@ IMAGES = ROOT / "data" / "images"
 TRUTH = {  # ảnh tem -> góc cần xoay
     "i1a8b92bd0f": 0, "i4696eba182": 0, "i14ce59283f": 0, "id4327f47aa": 0, "i47919da896": 0,
     "ib09c0d9283": 0, "ib38ccfb9ae": 0, "if1333f942a": 0, "i917d514254": 0,
-    "if4c3207219": 270, "i45684be254": 270, "i99c11a9723": 270, "i0c8795f9e4": 270,
+    # 3 ảnh dưới đây đã được xoay đứng và đổi tên ngày 21/10 (if4c3207219, i45684be254, i99c11a9723 cũ cần 270°)
+    "if34e142980": 0, "i3b57d76b6f": 0, "i2a7ec63124": 0, "i0c8795f9e4": 270,
     "i11b34fb114": 90, "i0cee1afd5e": 90,
 }
 NO_LABEL = ["ia8102a54d8", "i05f9ba05b0", "i611d22f8df", "i19d34792e8", "i55cb3bc0d2", "i8973772ec8", "id364677da7", "i5e0a7ace34"]

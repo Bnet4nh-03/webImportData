@@ -18,48 +18,61 @@
       <div><b>Tem Hàng Lỗi</b><small>CCVN · đọc tem + đối chiếu DB</small></div>
     </div>
     <div class="top-actions">
-      <span id="sync" class="sync off" title="">● Đang kết nối…</span>
+      <button id="tgpill" class="tgpill" title="Nhập bot PCBA-CCVN">📤 <b id="tgpillCount">0/0</b><i id="tgpillDot" class="dot"></i></button>
+      <span id="sync" class="sync off" title="">●</span>
       <button id="btnPhone" class="icon-btn" title="Kết nối điện thoại">📱</button>
-      <button id="btnSettings" class="icon-btn" title="Cài đặt AI">⚙️</button>
+      <button id="btnSettings" class="icon-btn" title="Cài đặt">⚙️</button>
     </div>
+    <div class="tgline" title="Số dòng đã nhập bot"><i id="tglineFill"></i></div>
   </header>
 
   <main>
     <div id="banners"></div>
-    <section id="tgbar" class="tgbar" aria-live="polite"></section>
+    <section id="tgbar" class="tgbar" hidden aria-live="polite"></section>
 
     <section class="capture">
-      <label class="cap-btn primary">
-        <span class="cap-ico">📷</span><span><b>Chụp tem</b><small>mỗi ảnh một dòng</small></span>
+      <label class="cap-btn primary" title="Chụp tem — mỗi ảnh một dòng">
+        <span class="cap-ico">📷</span><span><b>Chụp tem</b></span>
         <input id="inpCamera" type="file" accept="image/*" capture="environment" hidden>
       </label>
-      <label class="cap-btn">
-        <span class="cap-ico">🖼️</span><span><b>Chọn ảnh</b><small>chọn nhiều ảnh cùng lúc</small></span>
+      <label class="cap-btn" title="Chọn nhiều ảnh tem cùng lúc">
+        <span class="cap-ico">🖼️</span><span><b>Chọn ảnh</b></span>
         <input id="inpGallery" type="file" accept="image/*" multiple hidden>
       </label>
-      <label class="check-row compact"><input type="checkbox" id="chkEdit"> Xoay / cắt ảnh trước khi gửi</label>
     </section>
 
     <section class="toolbar">
       <div id="filters" class="filters" role="tablist"></div>
       <div class="tools">
         <input id="search" type="search" placeholder="Tìm ticket, SN, trạm…" autocomplete="off">
-        <span class="zoomctl" title="Thu phóng bảng (lưu trên máy này) — Ctrl+Alt+ / Ctrl+Alt-">
-          <button type="button" class="btn sm" id="zoomOut" aria-label="Thu nhỏ bảng">−</button>
-          <button type="button" class="btn sm zoomval" id="zoomVal" title="Về 100%">100%</button>
-          <button type="button" class="btn sm" id="zoomIn" aria-label="Phóng to bảng">+</button>
-        </span>
-        <button id="btnSummary" class="btn" title="Bảng tổng hợp theo loại Board: PASS / sửa xong / Discard / chưa xong">📊 Tổng hợp</button>
-        <button id="btnAddRow" class="btn">+ Dòng</button>
-        <button id="btnAddCol" class="btn">+ Cột</button>
-        <button id="btnCopy" class="btn">⧉ Sao chép</button>
-        <button id="btnExport" class="btn primary">⬇ Excel</button>
+        <button id="btnSummary" class="btn" title="Tổng hợp theo loại Board: PASS / sửa xong / Discard / chưa xong">📊</button>
+        <button id="btnExport" class="btn primary" title="Xuất Excel (kèm sheet Tổng hợp)">⬇ Excel</button>
         <details class="menu">
-          <summary class="btn">⋯</summary>
+          <summary class="btn" title="Thêm thao tác">⋯</summary>
           <div class="menu-list">
+            <div class="menu-sec">Bảng</div>
+            <button id="btnAddRow">＋ Thêm dòng nhập tay</button>
+            <button id="btnAddCol">＋ Thêm cột riêng</button>
+            <button id="btnCopy">⧉ Sao chép bảng (dán vào Excel)</button>
+            <div class="menu-row" title="Lưu trên máy này — Ctrl+Alt+= / Ctrl+Alt+−"><span>🔍 Cỡ bảng</span>
+              <span class="zoomctl">
+                <button type="button" class="btn sm" id="zoomOut" aria-label="Thu nhỏ bảng">−</button>
+                <button type="button" class="btn sm zoomval" id="zoomVal" title="Về 100%">100%</button>
+                <button type="button" class="btn sm" id="zoomIn" aria-label="Phóng to bảng">+</button>
+              </span></div>
+            <label class="menu-check"><input type="checkbox" id="chkEdit"> Xoay / cắt ảnh trước khi gửi</label>
+            <div class="menu-sec">Dữ liệu</div>
             <a href="api/photos.zip" download>🗂 Tải toàn bộ ảnh (.zip)</a>
             <button id="btnRematch">🔁 Đối chiếu lại DB cho tất cả</button>
             <button id="btnRetryErrors">↻ Đọc lại các ảnh lỗi</button>
+            <div class="menu-sec">Màu ô</div>
+            <div class="legend">
+              <span><i class="lg-uncertain"></i>AI chưa chắc</span>
+              <span><i class="lg-fixed"></i>Đã sửa theo DB</span>
+              <span><i class="lg-fromdb"></i>Điền từ DB</span>
+              <span><i class="lg-same"></i>Khớp DB</span>
+              <span><i class="lg-mismatch"></i>Khác DB</span>
+            </div>
             <button id="btnClearAll" class="danger">🗑 Xóa toàn bộ bảng</button>
           </div>
         </details>
@@ -67,14 +80,6 @@
     </section>
 
     <section id="summary" class="summary" hidden></section>
-
-    <div class="legend">
-      <span><i class="lg-uncertain"></i>AI chưa chắc</span>
-      <span><i class="lg-fixed"></i>Đã sửa theo DB</span>
-      <span><i class="lg-fromdb"></i>Điền từ DB</span>
-      <span><i class="lg-same"></i>Khớp DB</span>
-      <span><i class="lg-mismatch"></i>Khác DB</span>
-    </div>
 
     <div class="table-wrap">
       <table id="grid"><thead></thead><tbody></tbody></table>
