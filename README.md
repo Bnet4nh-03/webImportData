@@ -43,6 +43,12 @@ js/excel.js     Xuất .xlsx và sao chép dạng bảng
 
 ## Đối chiếu với ccts_tickets.db
 
+- **Thứ tự ưu tiên**: Ticket ID (100 điểm) > **SN** (50) > mã trạm (30) > **ngày** (tối đa 20, yếu nhất). Ticket cùng SN được lấy
+  làm ứng viên trước tiên. Ngày chỉ để chọn ticket gần ngày nhất trong các ticket cùng SN/trạm: đúng ngày ±1 = 20,
+  lệch ≤3 ngày = 9, ≤7 = 6, ≤15 = 3, ≤30 = 1 (kỹ sư hay ghi ngày sớm/muộn hơn ngày onsite trên DB).
+- **Index trong RAM** cho mã ticket / SN / mã trạm gần giống (chia chuỗi thành khúc, chỉ so các mã trùng khúc):
+  tìm + chấm điểm ~10–20 ms/tem thay vì ~300 ms. Đo: `python tools/eval_matching.py --shift 7` (ngày lệch ±7).
+
 | Cột | Trường trong DB | Cách xử lý |
 |---|---|---|
 | 🤖 Ticket ID | `ccts_ticket_id` | Lấy theo DB |

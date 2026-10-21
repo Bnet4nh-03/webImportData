@@ -1006,7 +1006,9 @@ $("#drawer").addEventListener("click", async (e) => {
     case "auto": await send(`api/rows/${r.id}/match`, { pk: null }).catch(() => {}); return setTimeout(loadCandidates, 400);
     case "unlink": {
       const filled = COMPARE_KEYS.filter((k) => r.values?.[k]).length;
-      if (filled && !confirm("Bỏ khớp và XOÁ TRỐNG Ticket ID, SN, Date onsite, Original phenomenon, Station code để tự nhập tay?\nDòng này sẽ không tự đối chiếu DB nữa (bấm Tự động để bật lại).")) return;
+      const reading = r.status === "queued" || r.status === "processing";
+      if (reading && !confirm("Dòng này đang chờ AI đọc. Dừng đọc và chuyển sang nhập tay?")) return;
+      if (filled && !reading && !confirm("Bỏ khớp và XOÁ TRỐNG Ticket ID, SN, Date onsite, Original phenomenon, Station code để tự nhập tay?\nDòng này sẽ không tự đối chiếu DB nữa (bấm Tự động để bật lại).")) return;
       await send(`api/rows/${r.id}/match`, { pk: "", clear: true }).catch(() => {});
       toast("Đã bỏ khớp — nhập tay các ô bên dưới. Có thể bấm “Chọn ticket này” ở danh sách nếu tìm thấy ticket đúng.");
       setTimeout(() => {

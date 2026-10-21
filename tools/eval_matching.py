@@ -14,6 +14,7 @@ import json
 import random
 import sqlite3
 import sys
+import time
 from collections import Counter
 from datetime import date, timedelta
 from pathlib import Path
@@ -81,7 +82,7 @@ def corrupt(s: str, k: int, rnd: random.Random) -> str:
     return "".join(s)
 
 
-def synth(con: sqlite3.Connection, n: int, seed: int) -> list[tuple]:
+def synth(con: sqlite3.Connection, n: int, seed: int, shift: int = 1) -> list[tuple]:
     """Tem mô phỏng từ ticket thật 90 ngày gần nhất, cài lỗi giống kiểu AI đọc sai đã thấy trên tem thật."""
     rnd = random.Random(seed)
     # Mẫu cố định theo seed (ORDER BY random() của SQLite không đặt seed được -> mỗi lần một bộ khác, không so sánh được)
@@ -110,8 +111,8 @@ def synth(con: sqlite3.Connection, n: int, seed: int) -> list[tuple]:
         s = "core 120 kw" if rnd.random() < 0.1 else corrupt(sn, rnd.choice((0, 0, 1, 2, 3)), rnd)
         # Trạm: AI bỏ "C.", 0-2 lỗi
         stn = corrupt(st.split(".", 1)[-1], rnd.choice((0, 0, 1, 2)), rnd)
-        # Ngày tem: lệch -1..+1 so với onsite; 12% sai năm (2020), 8% không đọc được
-        d = on + timedelta(days=rnd.choice((-1, 0, 0, 1)))
+        # Ngày tem: lệch -1..+1 so với onsite (--shift N: kỹ sư ghi sớm/muộn tới N ngày); 12% sai năm (2020), 8% không đọc được
+        d = on + timedelta(days=rnd.choice((-1, 0, 0, 1)) if shift <= 1 else rnd.randint(-shift, shift))
         y = 2020 if rnd.random() < 0.12 else d.year
         day = "" if rnd.random() < 0.08 else f"{d.day}/{d.month}/{y}"
         out.append((tid, t, s, stn, day, on + timedelta(days=rnd.randrange(0, 4))))  # ngày chụp tem: sau onsite 0-3 ngày
@@ -132,6 +133,7 @@ def main() -> None:
     ap.add_argument("--n", type=int, default=500)
     ap.add_argument("--seed", type=int, default=7)
     ap.add_argument("-v", action="store_true", help="in từng tem đọc thật")
+    ap.add_argument("--shift", type=int, default=1, help="ngày tem lệch ngày onsite tới N ngày (mặc định ±1)")
     ap.add_argument("--baseline", action="store_true", help="đo cách khớp cũ để so sánh")
     a = ap.parse_args()
     global BASELINE
@@ -150,8 +152,10 @@ def main() -> None:
             print(f"  {truth:20} đọc {t!r:22} sn {s!r:16} trạm {st!r:12} ngày {day!r:11} -> {res} {f'({alts})' if alts else ''}")
     report("Đọc thật (AI)", real)
 
-    sims = synth(con, a.n, a.seed)
-    report("Mô phỏng", [judge(idx, tem_values(t, s, st, day, ref), truth)[0] for truth, t, s, st, day, ref in sims])
+    sims = synth(con, a.n, a.seed, a.shift)
+    t0 = time.perf_counter()
+    report(f"Mô phỏng ±{a.shift} ngày", [judge(idx, tem_values(t, s, st, day, ref), truth)[0] for truth, t, s, st, day, ref in sims])
+    print(f"  tìm + chấm điểm: {1000 * (time.perf_counter() - t0) / max(1, len(sims)):.1f} ms/tem")
 
 
 if __name__ == "__main__":

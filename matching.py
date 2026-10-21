@@ -19,6 +19,7 @@ import time
 from collections import defaultdict
 from datetime import date, timedelta
 from pathlib import Path
+from typing import Callable
 
 # ---------- Chuẩn hóa mã ----------
 
@@ -26,12 +27,15 @@ from pathlib import Path
 _CONFUSE = str.maketrans({"O": "0", "Q": "0", "D": "0", "I": "1", "L": "1", "Z": "2", "S": "5", "B": "8", "G": "6"})
 
 
+_NON_ALNUM = re.compile(r"[^A-Z0-9]+")
+
+
 def _alnum(s: str | None) -> str:
-    return "".join(ch for ch in (s or "").upper() if ch.isascii() and ch.isalnum())
+    return _NON_ALNUM.sub("", (s or "").upper())
 
 
 def norm_id(s: str | None) -> str:
-    return "".join(ch for ch in (s or "").upper() if ch.isascii() and ch.isalnum()).translate(_CONFUSE)
+    return _NON_ALNUM.sub("", (s or "").upper()).translate(_CONFUSE)
 
 
 def hamming_le(a: str, b: str, k: int) -> bool:
@@ -52,6 +56,53 @@ def lev_le1(a: str, b: str) -> bool:
     while i < len(a) and a[i] == b[i]:
         i += 1
     return a[i:] == b[i + 1:]
+
+
+def _blocks(s: str, parts: int) -> list[str]:
+    n = len(s)
+    cut = [n * i // parts for i in range(parts + 1)]
+    return [s[cut[i]:cut[i + 1]] for i in range(parts)]
+
+
+def _end_k(short: int) -> int:
+    """Độ dài đầu/cuối chắc chắn trùng khi hai chuỗi lệch nhau 1 ký tự thêm/bớt (chuỗi ngắn dài `short`)."""
+    return 2 if short < 5 else 3 if short < 9 else 5
+
+
+class NearIndex:
+    """Tìm nhanh chuỗi gần giống thay cho duyệt cả danh sách (370 nghìn mã ticket: ~0,2 s -> ~1 ms mỗi lần tìm).
+    Nguyên lý ngăn kéo: chia chuỗi thành H+1 khúc, chuỗi cùng độ dài lệch <= H ký tự chắc chắn trùng hẳn ít nhất 1 khúc;
+    lệch 1 ký tự thêm/bớt thì k ký tự đầu hoặc k ký tự cuối chắc chắn trùng. Chỉ so kỹ các chuỗi trùng khúc đó.
+    Kết quả giữ đúng thứ tự trong danh sách gốc (như khi duyệt tuần tự)."""
+
+    def __init__(self, items_by_len: dict[int, list], key: Callable[[object], str], ham: int):
+        self.items, self.key, self.ham = items_by_len, key, ham
+        idx: dict[tuple, list[int]] = defaultdict(list)
+        for ln, items in items_by_len.items():
+            ks = {_end_k(ln), _end_k(ln - 1)}
+            for i, it in enumerate(items):
+                s = key(it)
+                for b, part in enumerate(_blocks(s, ham + 1)):
+                    idx[(ln, b, part)].append(i)
+                for k in ks:
+                    idx[(ln, "<", s[:k])].append(i)
+                    idx[(ln, ">", s[-k:])].append(i)
+        self.idx = dict(idx)
+
+    def same_len(self, q: str, k: int) -> list:
+        """Cùng độ dài, lệch tối đa k ký tự (k <= ham)."""
+        pos: set[int] = set()
+        for b, part in enumerate(_blocks(q, self.ham + 1)):
+            pos.update(self.idx.get((len(q), b, part), ()))
+        items = self.items.get(len(q), ())
+        return [items[i] for i in sorted(pos) if hamming_le(self.key(items[i]), q, k)]
+
+    def off_by_one(self, q: str, ln: int) -> list:
+        """Độ dài `ln` = len(q) ± 1, thêm/bớt đúng 1 ký tự."""
+        k = _end_k(min(len(q), ln))
+        pos = set(self.idx.get((ln, "<", q[:k]), ())) | set(self.idx.get((ln, ">", q[-k:]), ()))
+        items = self.items.get(ln, ())
+        return [items[i] for i in sorted(pos) if lev_le1(self.key(items[i]), q)]
 
 
 def lcs_ratio(a: str, b: str) -> float:
@@ -283,6 +334,9 @@ class TicketIndex:
         self.raw_sns_by_len: dict[int, list[str]] = {}
         self.raw_sn_norm: dict[str, str] = {}
         self.by_station: dict[str, list[str]] = {}  # mã trạm -> ticket, mới nhất trước
+        self.near_ids: NearIndex | None = None  # tìm nhanh mã ticket / SN / mã trạm gần giống
+        self.near_sns: NearIndex | None = None
+        self.near_st: NearIndex | None = None
         # Đuôi mã ticket: 3-4 ký tự cuối + SN/trạm + ngày gần như luôn chỉ ra đúng 1 ticket (99,4% trên DB).
         self.by_tail4: dict[str, list[str]] = {}
         self.by_tail3: dict[str, list[str]] = {}
@@ -366,6 +420,12 @@ class TicketIndex:
             self.by_sn, self.sns_by_len = dict(by_sn), dict(sns_by_len)
             self.by_tail4, self.by_tail3, self.pk_station = dict(by_tail4), dict(by_tail3), pk_station
             self.heads_by_day = dict(heads)
+            self.near_ids = NearIndex(self.ids_by_len, lambda it: it[0], 2)
+            self.near_sns = NearIndex(self.sns_by_len, lambda n: n, 1)
+            st_by_len: dict[int, list[tuple[int, str]]] = defaultdict(list)
+            for i, k in enumerate(self.by_station):
+                st_by_len[len(k)].append((i, k))
+            self.near_st = NearIndex(dict(st_by_len), lambda it: it[1], 1)
             self.count = len(rows)
             self.loaded_mtime = mtime
             print(f"[db] {self.count:,} ticket, {len(by_sn):,} SN — {time.time() - t0:.1f}s", flush=True)
@@ -373,18 +433,17 @@ class TicketIndex:
     def _fuzzy_ids(self, q: str) -> list[str]:
         if len(q) < 6:
             return []
-        out = [pk for n, pk in self.ids_by_len.get(len(q), ()) if hamming_le(n, q, 2)]
+        out = [pk for _, pk in self.near_ids.same_len(q, 2)]
         for ln in (len(q) - 1, len(q) + 1):  # thiếu/thừa một ký tự
-            out += [pk for n, pk in self.ids_by_len.get(ln, ()) if (n[:2] == q[:2] or n[-2:] == q[-2:]) and lev_le1(n, q)]
+            out += [pk for n, pk in self.near_ids.off_by_one(q, ln) if n[:2] == q[:2] or n[-2:] == q[-2:]]
         return out
 
     def _fuzzy_sns(self, q: str) -> list[str]:
         if len(q) < 6:
             return []
         out: list[str] = []
-        for n in self.sns_by_len.get(len(q), ()):
-            if hamming_le(n, q, 1):
-                out += self.by_sn[n]
+        for n in self.near_sns.same_len(q, 1):
+            out += self.by_sn[n]
         return out
 
     def heads_near(self, d: date | None, tol: int = 3) -> set[str]:
@@ -401,9 +460,8 @@ class TicketIndex:
             return []
         # AI hay bỏ "C." / "B." (trạm đổi pin) ở đầu mã trạm (vd "HNO1029" thay vì "C.HNO1029")
         near = [k for k in ((q, "C" + q, "8" + q) if PARTIAL_ID else (q,)) if k in self.by_station]  # norm_id: "B" -> "8"
-        for k in self.by_station:
-            if k not in near and ((len(k) == len(q) and hamming_le(k, q, 1)) or (abs(len(k) - len(q)) == 1 and lev_le1(k, q))):
-                near.append(k)
+        found = self.near_st.same_len(q, 1) + self.near_st.off_by_one(q, len(q) - 1) + self.near_st.off_by_one(q, len(q) + 1)
+        near += [k for _, k in sorted(found) if k not in near]
         return near[:6]
 
     def _char_ids(self, sets: list[str | None]) -> list[str]:
@@ -420,16 +478,25 @@ class TicketIndex:
         return out
 
     def search_for(self, values: dict, chars: dict | None = None, limit: int = 80, fmt: str = "mdy") -> list[dict]:
-        """Ticket ứng viên cho một dòng: theo Ticket ID (đúng, gần đúng, mẫu ký tự, đầu mã đoán từ ngày, đuôi mã),
-        SN (đúng, gần đúng, mẫu ký tự); nếu chưa chắc thì thêm ticket của các trạm có mã gần giống."""
+        """Ticket ứng viên cho một dòng: theo SN trước (đúng, gần đúng, mẫu ký tự), rồi Ticket ID (đúng, gần đúng,
+        mẫu ký tự, đầu mã đoán từ ngày, đuôi mã); nếu chưa chắc thì thêm ticket của các trạm có mã gần giống."""
         if not self.ok:
             return []
         self.ensure()
         chars = chars or {}
         pks: dict[str, None] = {}
-        q = norm_id(values.get("ticket_id"))
         day = parse_day(values.get("date_onsite"), fmt)
         st_near = self._near_stations(norm_id(values.get("station_code")))
+        # Ưu tiên SN: ticket cùng SN đứng đầu danh sách ứng viên (không bị cắt bởi giới hạn), sau đó mới tới mã ticket.
+        sn = norm_id(values.get("sn"))
+        if sn:
+            hits = list(self.by_sn.get(sn) or [])
+            if not hits:
+                hits = self._fuzzy_sns(sn)
+                if chars.get("sn"):
+                    hits += self._char_sns(chars["sn"])
+            pks.update(dict.fromkeys(hits))
+        q = norm_id(values.get("ticket_id"))
         if q:
             hits = list(self.by_id.get(q) or [])
             if not hits:
@@ -447,14 +514,6 @@ class TicketIndex:
                 if PARTIAL_ID and len(q) >= 3 and st_near:
                     near = set(st_near)
                     hits += [pk for pk in self.by_tail3.get(q[-3:], ()) if self.pk_station.get(pk) in near]
-            pks.update(dict.fromkeys(hits))
-        q = norm_id(values.get("sn"))
-        if q:
-            hits = list(self.by_sn.get(q) or [])
-            if not hits:
-                hits = self._fuzzy_sns(q)
-                if chars.get("sn"):
-                    hits += self._char_sns(chars["sn"])
             pks.update(dict.fromkeys(hits))
         strong = bool(pks) and any(norm_id(values.get(k)) in idx for k, idx in (("ticket_id", self.by_id), ("sn", self.by_sn)))
         if not strong:
@@ -503,7 +562,23 @@ class TicketIndex:
 
 # ---------- Chấm điểm ----------
 
-DAY_TOL = 1  # ngày trên tem lệch ngày onsite tối đa 1 ngày vẫn coi là khớp
+DAY_TOL = 1  # ngày trên tem lệch ngày onsite tối đa 1 ngày: coi là đúng ngày
+DAY_OK = 7  # kỹ sư hay ghi ngày sớm/muộn hơn ngày trên DB vài ngày: vẫn dùng để đoán đầu mã ticket
+# Ngày là bằng chứng YẾU NHẤT (mã ticket 100 > SN 50 > trạm 30 > ngày <= 20): chỉ để chọn ticket gần ngày nhất
+# trong các ticket cùng SN/trạm, lệch vài ngày vẫn được điểm.
+DATE_PTS = ((1, 20), (3, 9), (7, 6), (15, 3), (30, 1))
+
+
+def day_dist(d: date | None, t: dict, fmt: str) -> int | None:
+    """Số ngày lệch giữa ngày trên tem và ngày onsite của ticket (ticket chưa onsite: None, xem điểm ngày tạo)."""
+    on = parse_day(t["onsiteTime"], fmt)
+    return abs((on - d).days) if d and on else None
+
+
+def date_points(dist: int | None) -> int:
+    if dist is None:
+        return 0
+    return next((p for lim, p in DATE_PTS if dist <= lim), 0)
 # Khớp theo một phần mã ticket (đuôi mã, đầu mã đoán từ ngày) + mã trạm thiếu "C."/"B.". Tắt = cách khớp cũ.
 PARTIAL_ID = True
 
@@ -543,22 +618,22 @@ def score(v: dict, t: dict, fmt: str, chars: dict | None = None) -> dict:
 
     id_pts = max(sim("ticket_id", t["id"], (100, 70, 40)), id_sim(v.get("ticket_id", ""), t["thirdId"], (100, 70, 40)))
     id_pts = id_pts or soft("ticket_id", t["id"], 40, 25)
-    sn_pts = sim("sn", t["sn"], (50, 30, 0)) or soft("sn", t["sn"], 30, 15)
+    sn_close = sim("sn", t["sn"], (50, 30, 0))  # SN đúng hoặc lệch <= 1-2 ký tự
+    sn_pts = sn_close or soft("sn", t["sn"], 30, 15)
     # AI hay bỏ "C." ở đầu mã trạm: so cả với phần sau dấu chấm.
     st_pts = max(sim("station_code", t["station"], (30, 20, 0)),
                  sim("station_code", t["station"].split(".", 1)[-1], (30, 20, 0)) if PARTIAL_ID else 0)
-    date_pts = 0
+    dist = day_dist(parse_day(v.get("date_onsite"), fmt), t, fmt)
+    date_pts = date_points(dist)
+    cr = parse_day(t["createTime"], fmt)
     d = parse_day(v.get("date_onsite"), fmt)
-    if d:
-        on = parse_day(t["onsiteTime"], fmt)
-        cr = parse_day(t["createTime"], fmt)
-        if on and abs((on - d).days) <= DAY_TOL:
-            date_pts = 25
-        elif cr and -1 <= (d - cr).days <= 30:
-            date_pts = 8  # ngày thay nằm sau ngày tạo ticket
-    # Đuôi mã chỉ phân biệt được khi đi cùng ngày onsite (±1) VÀ SN hoặc trạm (đuôi + ngày một mình: 22,7%).
-    id_pts = max(id_pts, tail_head_pts(v.get("ticket_id", ""), t["id"], date_pts > 0,
-                                       date_pts >= 25 and (sn_pts >= 30 or st_pts >= 20)))
+    if cr and d and -1 <= (d - cr).days <= 30:
+        date_pts = max(date_pts, 3)  # ngày thay nằm sau ngày tạo ticket
+    # Đuôi mã chỉ phân biệt được khi đi cùng ngày onsite gần đúng VÀ SN hoặc trạm (đuôi + ngày một mình: 22,7%).
+    # SN "giống lờ mờ" (soft) không tính: SN BSS-… dài, chung phần đầu nên rất nhiều SN giống lờ mờ nhau.
+    close = dist is not None and (dist <= DAY_TOL or (dist <= 3 and sn_close >= 30))
+    id_pts = max(id_pts, tail_head_pts(v.get("ticket_id", ""), t["id"], dist is not None and dist <= DAY_OK,
+                                       close and (sn_close >= 30 or st_pts >= 20)))
     return {"total": id_pts + sn_pts + st_pts + date_pts, "id": id_pts, "sn": sn_pts, "station": st_pts, "date": date_pts}
 
 

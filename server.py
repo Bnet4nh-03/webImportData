@@ -337,6 +337,9 @@ class Store:
                     r["edited"].pop(k, None)
                     r["flags"].pop(k, None)
                 r["diff"] = {}
+                if r["status"] in ("queued", "processing", "error"):
+                    # Chuyển sang nhập tay: huỷ lượt đọc AI của dòng này (kết quả đang đọc dở sẽ bị bỏ qua).
+                    r["status"], r["error"] = "manual", ""
             if pk is None:
                 r["match"] = None
             elif pk == "":
@@ -678,8 +681,8 @@ class Store:
                 break
             with self.lock:
                 r = self.find(rid)
-                if not r or (cfg.get("_img") and r.get("image") != cfg["_img"]):
-                    break  # dòng bị xoá / ảnh đã được xoay hoặc chụp lại: thôi thử các chiều còn lại
+                if not r or r["status"] != "processing" or (cfg.get("_img") and r.get("image") != cfg["_img"]):
+                    break  # dòng bị xoá / chuyển nhập tay / ảnh đã được xoay hoặc chụp lại: thôi thử các chiều còn lại
                 r["warn"] = f"Chưa khớp DB ở chiều {rot}°, đang xoay ảnh đọc lại…"
                 self.emit_row(r)
         pts, res, rot = best
@@ -737,8 +740,8 @@ class Store:
         except ocr.ExtractError as err:
             with self.lock:
                 r = self.find(rid)
-                if not r or r.get("image") != img:
-                    return  # ảnh đã xoay / chụp lại trong lúc đọc: lần đọc mới đã được xếp hàng
+                if not r or r.get("image") != img or r["status"] != "processing":
+                    return  # ảnh đã xoay / chụp lại / chuyển nhập tay trong lúc đọc
                 if err.fatal:
                     r["status"] = "queued"  # chờ sửa cài đặt rồi tự chạy tiếp
                     worker.pause(str(err))
@@ -750,7 +753,7 @@ class Store:
         except Exception as err:  # noqa: BLE001 - báo lỗi lên dòng
             with self.lock:
                 r = self.find(rid)
-                if r and r.get("image") == img:
+                if r and r.get("image") == img and r["status"] == "processing":
                     r["status"], r["error"] = "error", f"Lỗi: {err}"
                     self.emit_row(r)
             return
@@ -762,10 +765,10 @@ class Store:
             atomic_write(IMAGES / f"{new_img}.jpg", ocr.rotate_jpeg(jpeg, rot))
         with self.lock:
             r = self.find(rid)
-            if not r or r.get("image") != img:
+            if not r or r.get("image") != img or r["status"] != "processing":
                 if new_img:
                     (IMAGES / f"{new_img}.jpg").unlink(missing_ok=True)
-                return  # bị xóa / chụp lại trong lúc đọc
+                return  # bị xóa / chụp lại / chuyển nhập tay trong lúc đọc
             if new_img:
                 r["image"] = new_img
                 r["upright"] = True  # đã lưu ảnh xoay đứng: đọc lại không xoay thêm

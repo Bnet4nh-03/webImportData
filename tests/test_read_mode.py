@@ -81,6 +81,22 @@ class TestReadMode(unittest.TestCase):
         self.store.patch(r["id"], {"values": {"ticket_id": "8ABCDEF12345"}, "commit": True})
         self.assertEqual((r["values"]["ticket_id"], rematched), ("8ABCDEF12345", []))  # nhập tay: không đối chiếu lại
 
+    def test_unlink_while_reading_cancels_ocr(self):
+        S.IMAGES.mkdir(parents=True, exist_ok=True)
+        (S.IMAGES / "i1.jpg").write_bytes(b"x")
+        r = self.store.new_row(image="i1", status="queued")
+        self.store.rows.append(r)
+        self.store.match = lambda rid: None
+
+        def read(cfg, jpeg, rid):  # đang đọc thì người dùng bấm "Bỏ khớp & nhập tay"
+            self.store.choose(rid, "", clear=True)
+            return fake_result(False, self.sn), 0, "full"
+        self.store._read = read
+        self.store.run_ocr(r["id"])
+        self.assertEqual((r["status"], r["values"]["ticket_id"], r["values"]["sn"]), ("manual", "", ""))
+        self.store.run_ocr(r["id"])  # còn trong hàng đợi: không đọc lại
+        self.assertEqual(r["status"], "manual")
+
     def test_rotate_label_saves_new_image_and_reads_upright(self):
         import io
         from PIL import Image
@@ -135,7 +151,7 @@ class TestReadMode(unittest.TestCase):
         ocr.rotate_jpeg = lambda jpeg, deg: rots.append(deg) or jpeg
         ocr.can_rotate = lambda: True
         try:
-            r = self.store.new_row(image="i1")
+            r = self.store.new_row(image="i1", status="processing")
             self.store.rows.append(r)
             cfg = {"provider": "ollama", "rotPref": 90, "dateFormat": "mdy", "readMode": "full"}
             # nhận chiều chắc chắn 270 -> đọc 270 trước, khớp ngay -> 1 lần đọc
