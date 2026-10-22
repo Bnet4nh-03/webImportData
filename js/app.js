@@ -1356,7 +1356,7 @@ function renderDbSync() {
     ? `DB: <b>${Number(db.count).toLocaleString("vi-VN")}</b> ticket · ticket mới nhất <b>${fmtDbTime(db.newest)}</b>${age != null ? ` <span class="${age > 2 ? "warn-text" : "ok-text"}">(${age <= 0 ? "hôm nay" : `${age} ngày trước`})</span>` : ""}`
     : `<span class="err-text">Không đọc được DB ${esc(db.error || "")}</span>`;
   const running = Boolean(s.running);
-  for (const id of ["#btnDbNew", "#btnDbProbe", "#btnDbAuto", "#btnDbFull", "#btnDbSave"]) $(id).disabled = running;
+  for (const id of ["#btnDbNew", "#btnDbProbe", "#btnDbAuto", "#btnDbFull", "#btnDbSave", "#btnDbLogin"]) $(id).disabled = running;
   $("#btnDbStop").hidden = !running;
   const p = s.progress;
   $("#dbProg").hidden = !(running && p);
@@ -1371,19 +1371,24 @@ function dbFields() {
   const c = { cctsPageSize: Number($("#setCctsPage").value), cctsDelay: Number($("#setCctsDelay").value), cctsToolDir: $("#setCctsDir").value.trim() };
   if ($("#setSso").value.trim()) c.cctsSso = $("#setSso").value.trim();
   if ($("#setToken").value.trim()) c.cctsToken = $("#setToken").value.trim();
+  c.cctsUser = $("#setCctsUser").value.trim();
+  if ($("#setCctsPass").value) c.cctsPass = $("#setCctsPass").value;
   return c;
 }
 async function saveDb(quiet) {
   const j = await API.post("api/config", dbFields());
   cfg = j.config;
-  $("#setSso").value = $("#setToken").value = "";
+  $("#setSso").value = $("#setToken").value = $("#setCctsPass").value = "";
   fillDbFields();
-  if (!quiet) toast("Đã lưu cookie / token đồng bộ DB.");
+  if (!quiet) toast("Đã lưu cài đặt đồng bộ DB.");
 }
 function fillDbFields() {
   if (!cfg) return;
   $("#setSso").placeholder = cfg.cctsSsoHint ? `Đã lưu ${cfg.cctsSsoHint} — để trống để giữ nguyên` : "dán giá trị sau ssoticket=";
   $("#setToken").placeholder = cfg.cctsTokenHint ? `Đã lưu ${cfg.cctsTokenHint} — để trống để giữ nguyên` : "dán giá trị token trong Payload";
+  $("#setCctsUser").value = cfg.cctsUser ?? "";
+  $("#setCctsPass").placeholder = cfg.cctsPassHint ? "Đã lưu (mã hoá) — để trống để giữ nguyên" : "mật khẩu đăng nhập console.cnpowercore.com";
+  $("#btnDbForget").hidden = !cfg.cctsUser && !cfg.cctsPassHint;
   $("#setCctsPage").value = String(cfg.cctsPageSize ?? 100);
   $("#setCctsDelay").value = String(cfg.cctsDelay ?? 3);
   $("#setCctsDir").value = cfg.cctsToolDir ?? "";
@@ -1392,12 +1397,34 @@ async function startDbSync(mode) {
   if (mode === "full" && !confirm("Quét lại toàn bộ ~370.000 ticket từ trang 1 — có thể mất nhiều giờ. Tiếp tục?")) return;
   try {
     await saveDb(true);
-    await API.post("api/dbsync/start", { mode });
-    toast(mode === "probe" ? "Đang kiểm tra token…" : "Đang lấy dữ liệu từ web — theo dõi tiến độ bên dưới.");
+    const j = await API.post("api/dbsync/start", { mode });
+    toast((j.login ? "Đang tự đăng nhập… " : "") + (mode === "probe" ? "Đang kiểm tra kết nối…" : "Đang lấy dữ liệu từ web — theo dõi tiến độ bên dưới."));
   } catch (err) { fail(err); }
   loadDbSync();
 }
 $("#btnDbSave").onclick = () => saveDb(false).catch(fail);
+$("#btnDbLogin").onclick = async () => {
+  const msg = $("#dbLoginMsg");
+  $("#btnDbLogin").disabled = true;
+  msg.textContent = "Đang đăng nhập…";
+  try {
+    await saveDb(true);
+    const j = await API.post("api/dbsync/login", {});
+    cfg = j.config;
+    fillDbFields();
+    msg.textContent = "✔ Đăng nhập được — đã lấy cookie + token mới.";
+  } catch (err) {
+    msg.textContent = `✖ ${err?.message || err}`;
+  } finally {
+    $("#btnDbLogin").disabled = false;
+  }
+};
+$("#btnDbForget").onclick = async () => {
+  if (!confirm("Xoá tài khoản + mật khẩu CNPowercore đã lưu?")) return;
+  cfg = (await API.post("api/config", { cctsUser: "", cctsPass: "" })).config;
+  fillDbFields();
+  $("#dbLoginMsg").textContent = "";
+};
 $("#btnDbProbe").onclick = () => startDbSync("probe");
 $("#btnDbNew").onclick = () => startDbSync("new");
 $("#btnDbAuto").onclick = () => startDbSync("auto");

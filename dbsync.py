@@ -69,41 +69,62 @@ class DbSync:
             self.state.update(kw)
         self.emit({"type": "dbsync", **self.snapshot()})
 
-    def start(self, mode: str, sso: str, token: str, db_path: str, tool_dir: str, page_size: int, delay: float) -> None:
+    def start(self, mode: str, sso: str, token: str, db_path: str, tool_dir: str, page_size: int, delay: float,
+              login: Callable[[], tuple[str, str]] | None = None) -> None:
+        """login: hàm tự đăng nhập -> (ssoticket, token), chạy ngầm trước khi tải (thay cho sso/token chép tay)."""
         if mode not in MODES:
             raise ValueError("Chế độ đồng bộ không hợp lệ.")
-        if not sso or not token:
-            raise ValueError("Chưa nhập cookie ssoticket và API token (⚙️ → Đồng bộ DB).")
+        if not login and (not sso or not token):
+            raise ValueError("Chưa nhập tài khoản CNPowercore hoặc cookie ssoticket + API token (⚙️ → Đồng bộ DB).")
         tool = Path(tool_dir or DEFAULT_TOOL_DIR)
         if not (tool / "main.py").exists():
             raise ValueError(f"Không thấy tool lấy dữ liệu (main.py) trong {tool}.")
         with self.lock:
-            if self.proc and self.proc.poll() is None:
+            if self.state.get("running"):
                 raise ValueError("Đang đồng bộ — chờ xong hoặc bấm Dừng.")
             label, args = MODES[mode]
             cmd = [sys.executable, "-u", "main.py", "--db", str(db_path), *args, "--page-size", str(int(page_size))]
             if mode != "probe":
                 cmd += ["--delay", str(float(delay))]
-            env = {**os.environ, "CCTS_SSOTICKET": sso, "CCTS_API_TOKEN": token, "PYTHONIOENCODING": "utf-8",
-                   "PYTHONUNBUFFERED": "1"}
-            flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
             self._lines.clear()
-            self.proc = subprocess.Popen(cmd, cwd=str(tool), env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                                         stdin=subprocess.DEVNULL, text=True, encoding="utf-8", errors="replace",
-                                         creationflags=flags)
+            self.proc = None
             self.state.update(running=True, mode=mode, label=label, status="", message="", progress=None,
                               started=int(time.time() * 1000), ended=None, stopping=False)
         self._line(f"▶ {label} (pageSize {page_size}{'' if mode == 'probe' else f', nghỉ {delay:g}s giữa các trang'})")
-        threading.Thread(target=self._read, daemon=True).start()
+        threading.Thread(target=self._run, args=(cmd, tool, sso, token, login), daemon=True).start()
+
+    def _run(self, cmd: list[str], tool: Path, sso: str, token: str, login) -> None:
+        if login:
+            self._line("🔑 Tự đăng nhập CNPowercore…")
+            try:
+                sso, token = login()
+            except Exception as e:  # noqa: BLE001 - LoginError hoặc lỗi giải mã mật khẩu
+                self._line(f"✖ {e}")
+                return self._finish("auth_error", str(e), None)
+            self._line("✔ Đăng nhập xong — đã lấy cookie ssoticket + token mới.")
+        env = {**os.environ, "CCTS_SSOTICKET": sso, "CCTS_API_TOKEN": token, "PYTHONIOENCODING": "utf-8",
+               "PYTHONUNBUFFERED": "1"}
+        with self.lock:
+            if self.state.get("stopping"):
+                stopped = True
+            else:
+                stopped = False
+                self.proc = subprocess.Popen(cmd, cwd=str(tool), env=env, stdout=subprocess.PIPE,
+                                             stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL, text=True,
+                                             encoding="utf-8", errors="replace",
+                                             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        if stopped:
+            return self._finish("interrupted", "", None)
+        self._read()
 
     def stop(self) -> bool:
         with self.lock:
-            p = self.proc
-        if not p or p.poll() is not None:
-            return False
-        with self.lock:
+            if not self.state.get("running"):
+                return False
             self.state["stopping"] = True
-        p.terminate()  # trang đã ghi vẫn giữ (tool commit từng trang + checkpoint); lần sau "Tiếp tục" chạy tiếp
+            p = self.proc
+        if p and p.poll() is None:
+            p.terminate()  # trang đã ghi vẫn giữ (tool commit từng trang + checkpoint); lần sau "Tiếp tục" chạy tiếp
         self._line("⏹ Đã yêu cầu dừng.")
         return True
 
@@ -133,7 +154,11 @@ class DbSync:
         code = p.wait()
         if not status:
             status = "interrupted" if self.state.get("stopping") else "completed" if code == 0 else "error"
-        self._line(f"■ {STATUS_TEXT.get(status, status)}{f' — {message}' if message else ''} (mã thoát {code})")
+        self._finish(status, message, code)
+
+    def _finish(self, status: str, message: str, code: int | None) -> None:
+        tail = "" if code is None else f" (mã thoát {code})"
+        self._line(f"■ {STATUS_TEXT.get(status, status)}{f' — {message}' if message else ''}{tail}")
         self._push(running=False, status=status, message=message, ended=int(time.time() * 1000))
         try:
             self.on_done(status)

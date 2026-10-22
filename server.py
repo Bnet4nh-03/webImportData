@@ -31,6 +31,7 @@ from urllib.parse import parse_qs, unquote, urlparse
 
 import matching as M
 import ocr
+import ccts_login as CL
 import dbsync as DS
 import telegram_bot as TG
 
@@ -73,11 +74,14 @@ DEFAULT_CONFIG = {
     # Đồng bộ ccts_tickets.db từ web CNPowercore (⚙️ → Đồng bộ DB). Cookie/token chỉ lưu ở data/config.json.
     "cctsSso": "",
     "cctsToken": "",
+    # Tự đăng nhập lấy cookie/token mỗi lần đồng bộ (mật khẩu mã hoá DPAPI, xem ccts_login.py).
+    "cctsUser": "",
+    "cctsPass": "",
     "cctsToolDir": DS.DEFAULT_TOOL_DIR,
     "cctsPageSize": 100,
     "cctsDelay": 3,
 }
-SECRET_KEYS = ("geminiKey", "cctsSso", "cctsToken")  # không bao giờ gửi về trình duyệt
+SECRET_KEYS = ("geminiKey", "cctsSso", "cctsToken", "cctsPass")  # không bao giờ gửi về trình duyệt
 TG_ACTIVE = ("queued", "running")
 
 uid = lambda p: p + uuid.uuid4().hex[:10]  # noqa: E731
@@ -997,6 +1001,7 @@ def public_config(c: dict) -> dict:
     for key in SECRET_KEYS:
         v = c.get(key) or ""
         out[key + "Hint"] = ("••••" + v[-4:]) if v else ""
+    out["cctsPassHint"] = "••••••" if c.get("cctsPass") else ""  # bản mã hoá: không hé lộ ký tự nào
     return out
 
 
@@ -1220,10 +1225,17 @@ class Handler(SimpleHTTPRequestHandler):
                 return self._json(200, {"ok": True})
             if p == "/api/dbsync/start":
                 c = store.config
+                login = ccts_login if c.get("cctsUser") and c.get("cctsPass") else None
                 dbsync.start(str(body.get("mode") or "new"), c.get("cctsSso", ""), c.get("cctsToken", ""), index.db_path,
                              c.get("cctsToolDir") or DS.DEFAULT_TOOL_DIR, int(c.get("cctsPageSize") or 100),
-                             float(c.get("cctsDelay") if c.get("cctsDelay") is not None else 3))
-                return self._json(200, {"ok": True})
+                             float(c.get("cctsDelay") if c.get("cctsDelay") is not None else 3), login=login)
+                return self._json(200, {"ok": True, "login": bool(login)})
+            if p == "/api/dbsync/login":
+                try:
+                    ccts_login()
+                except CL.LoginError as e:
+                    return self._json(200, {"ok": False, "error": str(e)})
+                return self._json(200, {"ok": True, "config": public_config(store.config)})
             if p == "/api/dbsync/stop":
                 return self._json(200, {"ok": True, "stopped": dbsync.stop()})
             if p == "/api/tg/stop":
@@ -1270,6 +1282,10 @@ class Handler(SimpleHTTPRequestHandler):
         for k in ("cctsSso", "cctsToken"):  # chỉ gửi khi người dùng gõ giá trị mới / xoá
             if k in body:
                 c[k] = str(body[k] or "").strip()
+        if "cctsUser" in body:
+            c["cctsUser"] = str(body["cctsUser"] or "").strip()
+        if "cctsPass" in body:  # chỉ gửi khi người dùng gõ mật khẩu mới / xoá
+            c["cctsPass"] = CL.protect(str(body["cctsPass"] or ""))
         if body.get("cctsToolDir"):
             c["cctsToolDir"] = str(body["cctsToolDir"]).strip()
         if body.get("cctsPageSize"):
@@ -1335,6 +1351,15 @@ def _after_dbsync(status: str) -> None:
     for rid in ids:
         store.match(rid)
     hub.send({"type": "dbsync_done", "rematched": len(ids), "db": DS.db_info(index.db_path)})
+
+
+def ccts_login() -> tuple[str, str]:
+    """Đăng nhập bằng tài khoản đã lưu, lưu lại cookie/token mới (để Kiểm tra token / chạy tay vẫn dùng được)."""
+    c = store.config
+    sso, token = CL.login(c.get("cctsUser", ""), CL.unprotect(c.get("cctsPass", "")))
+    c["cctsSso"], c["cctsToken"] = sso, token
+    store.save_config()
+    return sso, token
 
 
 dbsync = DS.DbSync(emit=lambda e: hub.send(e), on_done=_after_dbsync)

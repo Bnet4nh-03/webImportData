@@ -122,10 +122,12 @@ Bảng gợi ý Board theo model nằm trong `BOARD_RULES` ở `js/columns.js`; 
 ## Cập nhật DB ticket từ web (⚙️ → tab Đồng bộ DB)
 
 Dùng tool `D: _WORKSPACE_Python_Takedata_CCVN` (chạy ngầm, không sửa file của tool) để tải ticket mới vào `ccts_tickets.db`.
-1. Đăng nhập console.cnpowercore.com → F12 → lấy cookie `ssoticket` và header `token` → dán vào 2 ô, bấm **Lưu**.
-2. **Kiểm tra token** (4 request, không ghi DB) → **Lấy ticket mới** (hằng ngày). *Tiếp tục* / *Quét lại toàn bộ* nằm trong mục nâng cao.
-3. Xong: server tự nạp lại DB và khớp lại các dòng chưa khớp. Token chỉ lưu trong `data/config.json` (không gửi về trình duyệt, không ghi log).
-Khi DB cũ hơn 2 ngày, đầu trang hiện nhắc ⟳ Cập nhật.
+1. Nhập **tài khoản + mật khẩu** console.cnpowercore.com → **🔑 Lưu & thử đăng nhập**. Mỗi lần đồng bộ app tự đăng nhập
+   (`ccts_login.py`: lấy khóa RSA → mã hoá md5 mật khẩu như trang web → `/authen/login/validate`) để lấy cookie `ssoticket` + `token` mới.
+   Mật khẩu lưu trong `data/config.json` đã mã hoá Windows DPAPI (chỉ tài khoản Windows này trên máy này giải mã được), không gửi về trình duyệt.
+   Cách cũ (dán cookie/token lấy bằng F12) vẫn còn trong mục "Cách cũ".
+2. **Lấy ticket mới** (hằng ngày). *Tiếp tục* / *Quét lại toàn bộ* nằm trong mục nâng cao. *Kiểm tra kết nối*: 4 request, không ghi DB.
+3. Xong: server tự nạp lại DB và khớp lại các dòng chưa khớp. Khi DB cũ hơn 2 ngày, đầu trang hiện nhắc ⟳ Cập nhật.
 
 ## Nhập lên bot Telegram PCBA-CCVN (từng dòng)
 

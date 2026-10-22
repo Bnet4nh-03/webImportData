@@ -256,13 +256,26 @@
       <div data-tabpane="db" hidden>
         <div id="dbInfo" class="dbinfo muted small">Đang đọc DB…</div>
         <p class="note">Lấy ticket mới từ web <b>console.cnpowercore.com</b> vào <code>ccts_tickets.db</code> để app khớp được tem mới.
-          Cách lấy 2 giá trị (khi hết hạn thì lấy lại): đăng nhập <b>console.cnpowercore.com</b> → <b>F12</b> → tab <b>Network</b> →
-          lọc <code>findCCTSTicket</code> → bấm vào request:<br>• <b>Headers → Cookie</b>: giá trị sau <code>ssoticket=</code><br>
-          • <b>Payload</b>: giá trị <code>token</code><br>Lưu trên máy tính chạy server (<code>data/config.json</code>), không gửi về điện thoại / trình duyệt.</p>
-        <label class="field"><span>Cookie ssoticket</span>
-          <input id="setSso" type="password" autocomplete="off" spellcheck="false"></label>
-        <label class="field"><span>API token</span>
-          <input id="setToken" type="password" autocomplete="off" spellcheck="false"></label>
+          Lưu tài khoản một lần: mỗi lần đồng bộ app <b>tự đăng nhập</b> lấy cookie <code>ssoticket</code> + <code>token</code> mới, không cần F12.
+          Mật khẩu được mã hoá (Windows DPAPI) trong <code>data/config.json</code> trên máy chạy server, không gửi về điện thoại / trình duyệt.</p>
+        <div class="grid2">
+          <label class="field"><span>Tài khoản (username / email)</span>
+            <input id="setCctsUser" autocomplete="off" spellcheck="false"></label>
+          <label class="field"><span>Mật khẩu</span>
+            <input id="setCctsPass" type="password" autocomplete="new-password" spellcheck="false"></label>
+        </div>
+        <div class="actions left">
+          <button type="button" class="btn" id="btnDbLogin" title="Lưu tài khoản rồi đăng nhập thử để lấy cookie / token">🔑 Lưu &amp; thử đăng nhập</button>
+          <button type="button" class="btn sm" id="btnDbForget" hidden title="Xoá tài khoản + mật khẩu đã lưu">Xoá tài khoản</button>
+          <span id="dbLoginMsg" class="small muted"></span>
+        </div>
+        <details class="adv"><summary class="small muted">Cách cũ: dán cookie / token bằng tay</summary>
+          <p class="note small">Chỉ cần khi không lưu tài khoản. Đăng nhập web → <b>F12</b> → <b>Network</b> → lọc <code>findCCTSTicket</code> →
+            <b>Headers → Cookie</b>: giá trị sau <code>ssoticket=</code>; <b>Payload</b>: giá trị <code>token</code>.</p>
+          <label class="field"><span>Cookie ssoticket</span>
+            <input id="setSso" type="password" autocomplete="off" spellcheck="false"></label>
+          <label class="field"><span>API token</span>
+            <input id="setToken" type="password" autocomplete="off" spellcheck="false"></label></details>
         <div class="grid2">
           <label class="field"><span>Số ticket mỗi trang</span>
             <select id="setCctsPage"><option>50</option><option>100</option><option>200</option><option>500</option></select></label>
@@ -274,7 +287,7 @@
             <input id="setCctsDir" autocomplete="off" spellcheck="false"></label></details>
         <div class="actions left">
           <button type="button" class="btn" id="btnDbSave">💾 Lưu</button>
-          <button type="button" class="btn" id="btnDbProbe" title="4 request thử, không ghi DB">Kiểm tra token</button>
+          <button type="button" class="btn" id="btnDbProbe" title="4 request thử, không ghi DB">Kiểm tra kết nối</button>
           <button type="button" class="btn primary" id="btnDbNew" title="Chỉ lấy ticket mới ở đầu danh sách (dùng hằng ngày)">⟳ Lấy ticket mới</button>
           <button type="button" class="btn danger-outline" id="btnDbStop" hidden>⏹ Dừng</button>
         </div>
