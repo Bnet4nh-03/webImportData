@@ -755,3 +755,25 @@ details.adv { margin: 4px 0 8px; }
 details.adv > summary { cursor: pointer; }
 .actions.left { justify-content: flex-start; }
 #settings .modal-box { width: min(600px, 100%); }
+
+/* Khung ảnh tem phóng to được: lăn chuột / chụm 2 ngón, kéo để di chuyển, nháy đúp vừa khung, kéo góc để đổi chiều cao */
+.zbox { position: relative; height: 300px; min-height: 120px; max-height: 85vh; overflow: hidden; resize: vertical;
+  background: #0b0f12; border-radius: 10px; touch-action: none; cursor: zoom-in; }
+.zbox.zoomed { cursor: grab; }
+.zbox.zoomed:active { cursor: grabbing; }
+.dr-img .zbox img { width: 100%; height: 100%; max-height: none; object-fit: contain; transform-origin: 0 0; border-radius: 0;
+  cursor: inherit; transition: none; user-select: none; -webkit-user-drag: none; display: block; background: none; }
+.dr-img.pinned .zbox { height: 36vh; }
+.drawer.docked .dr-img .zbox { height: 46vh; border-radius: 8px; }
+.drawer.docked .dr-img.pinned .zbox { height: 40vh; }
+.zoombtns { display: flex; gap: 3px; justify-content: flex-end; margin-top: 4px; }
+.zoombtns .btn { min-width: 32px; padding-left: 6px; padding-right: 6px; }
+.zoombtns .zval { min-width: 54px; font-variant-numeric: tabular-nums; }
+@media (max-width: 820px) {
+  .dr-img.pinned .zbox { height: 28vh; }
+}
+.zwrap { position: relative; }
+.zwrap .zoombtns { position: absolute; top: 6px; right: 6px; margin: 0; opacity: .55; transition: opacity .15s; }
+.zwrap:hover .zoombtns, .zwrap .zoombtns:focus-within { opacity: 1; }
+.zwrap .zoombtns .btn { background: rgba(15, 20, 24, .78); color: #fff; border-color: rgba(255,255,255,.18); backdrop-filter: blur(2px); }
+@media (hover: none) { .zwrap .zoombtns { opacity: .9; } }

@@ -905,7 +905,14 @@ function renderDrawer() {
     </div>
     <div class="dr-scroll">
       <section class="dr-img ${r.image && pinImg() ? "pinned" : ""}">
-        ${r.image ? `<img src="${API.imgUrl(r.image)}" data-act2="view" alt="Ảnh tem" title="Bấm để xem ảnh lớn">` : `<div class="noimg big">Chưa có ảnh tem</div>`}
+        ${r.image ? `<div class="zwrap"><div class="zbox" data-zkey="${esc(r.image)}" title="Lăn chuột / chụm 2 ngón: phóng to · kéo: di chuyển · nháy đúp: vừa khung · kéo góc dưới phải: đổi chiều cao khung">
+          <img src="${API.imgUrl(r.image)}" alt="Ảnh tem" draggable="false"></div>
+          <div class="zoombtns">
+            <button class="btn sm" data-act2="zout" title="Thu nhỏ">−</button>
+            <button class="btn sm zval" data-act2="zreset" title="Vừa khung">100%</button>
+            <button class="btn sm" data-act2="zin" title="Phóng to">+</button>
+            <button class="btn sm" data-act2="view" title="Xem ảnh lớn toàn màn hình">⤢</button>
+          </div></div>` : `<div class="noimg big">Chưa có ảnh tem</div>`}
         <div class="dr-img-btns">
           <button class="btn primary" data-act2="cam-label">📷 ${r.image ? "Chụp lại tem" : "Chụp tem"}</button>
           ${r.image ? `<button class="btn" data-act2="retry">↻ Đọc lại</button>` : ""}
@@ -958,8 +965,114 @@ function renderDrawer() {
   else body.innerHTML = html;
   const sc = body.querySelector(".dr-scroll");
   if (sc) sc.scrollTop = scroll;
+  applyZoom();
   renderCandidates();
 }
+
+// ---------- Phóng to / kéo ảnh tem trong ngăn chi tiết (giữ nguyên mức phóng khi dòng được vẽ lại) ----------
+const Z_MAX = 8;
+let zoom = { key: "", s: 1, x: 0, y: 0 };
+const zbox = () => $("#drawerBody .zbox");
+
+function applyZoom() {
+  const box = zbox();
+  if (!box) return;
+  if (box.dataset.zkey !== zoom.key) zoom = { key: box.dataset.zkey, s: 1, x: 0, y: 0 }; // ảnh khác: vừa khung
+  const h = Number(pref.get("zoomH", "0"));
+  if (h) box.style.height = `${h}px`;
+  box.classList.toggle("zoomed", zoom.s > 1);
+  box.querySelector("img").style.transform = `translate(${zoom.x}px, ${zoom.y}px) scale(${zoom.s})`;
+  const v = $("#drawerBody .zval");
+  if (v) v.textContent = `${Math.round(zoom.s * 100)}%`;
+}
+
+function clampZoom(box) {
+  const w = box.clientWidth, h = box.clientHeight;
+  zoom.s = Math.min(Z_MAX, Math.max(1, zoom.s));
+  zoom.x = Math.min(0, Math.max(w - w * zoom.s, zoom.x));
+  zoom.y = Math.min(0, Math.max(h - h * zoom.s, zoom.y));
+}
+
+/** Phóng tới mức s, giữ điểm (px, py) của khung đứng yên (mặc định: giữa khung). */
+function zoomTo(s, px, py) {
+  const box = zbox();
+  if (!box) return;
+  px ??= box.clientWidth / 2;
+  py ??= box.clientHeight / 2;
+  const k = Math.min(Z_MAX, Math.max(1, s)) / zoom.s;
+  zoom.x = px - (px - zoom.x) * k;
+  zoom.y = py - (py - zoom.y) * k;
+  zoom.s *= k;
+  clampZoom(box);
+  applyZoom();
+}
+
+const boxPoint = (box, e) => {
+  const b = box.getBoundingClientRect();
+  return [e.clientX - b.left, e.clientY - b.top];
+};
+
+$("#drawerBody").addEventListener("wheel", (e) => {
+  const box = e.target.closest(".zbox");
+  if (!box) return;
+  e.preventDefault();
+  zoomTo(zoom.s * Math.exp(-e.deltaY * 0.0015), ...boxPoint(box, e));
+}, { passive: false });
+
+$("#drawerBody").addEventListener("dblclick", (e) => {
+  const box = e.target.closest(".zbox");
+  if (!box) return;
+  if (zoom.s > 1) zoomTo(1);
+  else zoomTo(2.5, ...boxPoint(box, e));
+});
+
+// Kéo (1 ngón / chuột) để di chuyển ảnh đã phóng; chụm 2 ngón để phóng to.
+const zPtr = new Map();
+let zPinch = null;
+$("#drawerBody").addEventListener("pointerdown", (e) => {
+  const box = e.target.closest(".zbox");
+  if (!box || e.button > 0) return;
+  const b = box.getBoundingClientRect();
+  if (e.clientX > b.right - 18 && e.clientY > b.bottom - 18) return; // góc đổi chiều cao khung
+  zPtr.set(e.pointerId, [e.clientX, e.clientY]);
+  box.setPointerCapture(e.pointerId);
+  if (zPtr.size === 2) {
+    const [a, c] = [...zPtr.values()];
+    zPinch = { d: Math.hypot(a[0] - c[0], a[1] - c[1]), s: zoom.s };
+  }
+});
+$("#drawerBody").addEventListener("pointermove", (e) => {
+  const last = zPtr.get(e.pointerId);
+  const box = zbox();
+  if (!last || !box) return;
+  zPtr.set(e.pointerId, [e.clientX, e.clientY]);
+  if (zPtr.size === 2 && zPinch) {
+    const [a, c] = [...zPtr.values()];
+    const b = box.getBoundingClientRect();
+    zoomTo(zPinch.s * Math.hypot(a[0] - c[0], a[1] - c[1]) / zPinch.d, (a[0] + c[0]) / 2 - b.left, (a[1] + c[1]) / 2 - b.top);
+    return;
+  }
+  if (zoom.s <= 1) return;
+  zoom.x += e.clientX - last[0];
+  zoom.y += e.clientY - last[1];
+  clampZoom(box);
+  applyZoom();
+});
+const zEnd = (e) => {
+  zPtr.delete(e.pointerId);
+  if (zPtr.size < 2) zPinch = null;
+};
+$("#drawerBody").addEventListener("pointerup", zEnd);
+$("#drawerBody").addEventListener("pointercancel", zEnd);
+// Kéo góc dưới phải để đổi chiều cao khung ảnh: nhớ cho lần sau.
+document.addEventListener("mouseup", () => {
+  const box = zbox();
+  if (box && box.offsetHeight && Math.abs(box.offsetHeight - Number(pref.get("zoomH", "0"))) > 4 && box.style.height) {
+    pref.set("zoomH", String(box.offsetHeight));
+    clampZoom(box);
+    applyZoom();
+  }
+});
 
 $("#drawer").addEventListener("click", async (e) => {
   if (e.target.closest("[data-close]")) return closeDrawer();
@@ -999,6 +1112,9 @@ $("#drawer").addEventListener("click", async (e) => {
       }
       return toast(reading ? "Đã xoay ảnh tem — sẽ tự đọc lại theo chiều mới." : "Đã xoay ảnh tem. Bấm ↻ Đọc lại để AI đọc theo chiều mới.");
     }
+    case "zin": return zoomTo(zoom.s * 1.5);
+    case "zout": return zoomTo(zoom.s / 1.5);
+    case "zreset": return zoomTo(1);
     case "pin":
       pref.set("pinImg", pinImg() ? "0" : "1");
       return renderDrawer();

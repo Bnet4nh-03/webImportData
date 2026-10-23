@@ -106,7 +106,9 @@ Bảng gợi ý Board theo model nằm trong `BOARD_RULES` ở `js/columns.js`; 
 
 - **Bấm ảnh tem trên bảng**: mở khung cố định bên trái (ảnh tem lớn → bảng so sánh Tem / DB / Đang dùng → sửa chữa → ticket gần giống → bot),
   bảng tính dời sang phải để vừa nhìn ảnh vừa sửa ô. Bấm ảnh dòng khác để chuyển dòng; kéo mép phải khung để đổi độ rộng;
-  bấm ảnh trong khung để xem ảnh lớn; ✕ hoặc Esc để đóng. Bấm số thứ tự dòng vẫn mở ngăn chi tiết như cũ.
+  ✕ hoặc Esc để đóng.
+  **Phóng to ảnh tem**: lăn chuột (hoặc chụm 2 ngón) trên ảnh, nút − % + ở góc ảnh; kéo để di chuyển, nháy đúp để vừa khung;
+  kéo góc dưới phải khung ảnh để đổi chiều cao (nhớ trên máy). Nút ⤢ mở ảnh lớn toàn màn hình. Bấm số thứ tự dòng vẫn mở ngăn chi tiết như cũ.
 
 **Điện thoại**: mỗi thẻ gồm ảnh tem bên trái, ô nhập failure_cause + disposition ở giữa, ảnh sau sửa + nút 📷 *Sau sửa* bên phải.
 
