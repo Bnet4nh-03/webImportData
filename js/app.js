@@ -1,9 +1,10 @@
 // Giao diện. Dữ liệu nằm trên server.py; mọi thiết bị mở web đều thấy cùng một bảng theo thời gian thực.
-import { COLUMNS, COMPARE_KEYS, DATE_FORMATS, PHOTO, boardsForModel } from "./columns.js";
+import { BOARDS, COLUMNS, COMPARE_KEYS, DATE_FORMATS, PHOTO, boardsForModel } from "./columns.js";
 import * as API from "./api.js";
 import * as IMG from "./image.js";
 import { exportXlsx, toTsv } from "./excel.js";
 import { initSheet } from "./sheet.js";
+import { decodeFile } from "./qr.js";
 import { SUMMARY_COLS, summarize } from "./summary.js";
 
 const $ = (sel, root = document) => root.querySelector(sel);
@@ -75,8 +76,8 @@ const FILTERS = [
   { key: "nodb", label: "Chưa khớp DB", test: (r) => r.status !== "queued" && r.status !== "processing" && r.match?.status !== "matched" && !isManual(r) },
   { key: "error", label: "Lỗi", test: (r) => r.status === "error" },
   { key: "checked", label: "Đã kiểm", test: (r) => r.checked },
-  { key: "tgdone", label: "Đã nhập bot", test: (r) => r.tg?.status === "done" },
-  { key: "tgtodo", label: "Chưa nhập bot", test: (r) => r.tg?.status !== "done" },
+  { key: "tgdone", label: "Đã nhập", test: (r) => r.tg?.status === "done" },
+  { key: "tgtodo", label: "Chưa nhập", test: (r) => r.tg?.status !== "done" },
 ];
 
 function visibleRows() {
@@ -102,12 +103,14 @@ function dbBadge(r) {
   return `<button class="db none" data-act="open" title="Chưa khớp ticket — bấm để tìm">–</button>`;
 }
 
-// ---------- Nhập lên bot Telegram ----------
+// ---------- Nhập bo mạch: hệ thống PCBA (mặc định) hoặc bot Telegram cũ ----------
+const isPcba = () => (st.tgConn?.target ?? "pcba") === "pcba";
 const tgPct = (t) => (t?.total ? Math.round((100 * Math.min(t.n || 0, t.total)) / t.total) : 0);
 
 /** Ô "Telegram" trên mỗi dòng: nút nhập, tiến độ, hoặc mã thiết bị bot trả về. */
 function tgCell(r) {
   const t = r.tg ?? {};
+  if (isPcba()) return pcbaCell(r, t);
   const code = t.deviceCode
     ? `<button class="devcode" data-act="copy-code" title="Repair #${esc(t.repairId)} — bấm để sao chép mã">${esc(t.deviceCode)}</button><small class="muted">Repair #${esc(t.repairId)}</small>`
     : t.repairId // Discard: bot tạo Repair nhưng không cấp mã thiết bị
@@ -126,6 +129,24 @@ function tgCell(r) {
       return `<button class="pill err" data-act="open" title="${esc(t.error)}">! Lỗi nhập</button><button class="btn xs" data-act="tg" title="${esc(t.error)}">📤 Thử lại</button>`;
     default:
       return `<button class="btn xs tg-go" data-act="tg" title="Tạo Repair trên bot PCBA-CCVN cho dòng này">📤 Nhập bot</button>${code}`;
+  }
+}
+
+/** Ô nhập trên mỗi dòng (hệ thống PCBA): nút nhập, tiến độ, hoặc số phiếu. */
+function pcbaCell(r, t) {
+  const no = t.deviceCode || t.pcba?.ticketNo || "";
+  const code = no ? `<button class="devcode" data-act="copy-code" title="Phiếu PCBA ${esc(no)} — bấm để sao chép">${esc(no)}</button>` : "";
+  switch (t.status) {
+    case "queued":
+      return `<span class="pill wait">⏳ Chờ nhập</span><button class="btn xs" data-act="tg-cancel" title="Bỏ khỏi hàng đợi">✕</button>`;
+    case "running":
+      return `<div class="tgrun"><div class="tgprog" title="${esc(t.step)}"><i style="width:${tgPct(t)}%"></i></div>${stopBtn("xs")}</div><small class="tgstep">${t.stopping ? "⛔ Đang dừng…" : `<i class="spin">◌</i> ${t.n || 0}/${t.total || "?"} ${esc(t.step || "Đang nhập")}`}</small>`;
+    case "done":
+      return `${code}<small class="muted">${esc(t.pcba?.status || t.result || "")}</small>`;
+    case "error":
+      return `<button class="pill err" data-act="open" title="${esc(t.error)}">! Lỗi nhập</button><button class="btn xs" data-act="tg" title="${esc(t.error)}">📤 ${no ? "Tiếp tục" : "Thử lại"}</button>${code}`;
+    default:
+      return `<button class="btn xs tg-go" data-act="tg" title="Tạo phiếu trên hệ thống PCBA cho dòng này">📤 Nhập</button>${code}`;
   }
 }
 
@@ -159,12 +180,15 @@ function renderTgBar() {
   const bad = rows.filter((r) => r.tg?.status === "error" || r.tg?.status === "uncertain").length;
   const queued = rows.filter((r) => r.tg?.status === "queued").length;
   const c = st.tgConn;
-  const conn = !c
+  const pc = isPcba();
+  const conn = pc
+    ? `<span class="tgconn on">● Hệ thống PCBA</span>`
+    : !c
     ? `<span class="tgconn">● Đang kiểm tra Telegram…</span>`
     : c.telegram
       ? `<span class="tgconn on" title="${esc(c.url)}">● Telegram Web sẵn sàng</span>`
       : `<span class="tgconn off">● ${c.edge ? "Edge đang mở nhưng chưa có tab Telegram" : "Chưa mở Edge cho bot"}</span><button class="btn xs" id="tgLaunch">Mở Telegram</button>`;
-  const warn = c && !c.playwright ? `<span class="err-text small">Thiếu Playwright: pip install playwright</span>` : "";
+  const warn = !pc && c && !c.playwright ? `<span class="err-text small">Thiếu Playwright: pip install playwright</span>` : "";
   const cur = st.tg.current && findRow(st.tg.current);
   const job = cur
     ? `<div class="tgjob"><b>Dòng #${rowNo(cur)}</b> · Bước ${cur.tg?.n || 0}/${cur.tg?.total || "?"}: ${esc(cur.tg?.step || "mở bot")}${cur.tg?.detail ? ` — <span class="muted">${esc(String(cur.tg.detail).slice(0, 60))}</span>` : ""}
@@ -174,9 +198,11 @@ function renderTgBar() {
   const busy = Boolean(st.tg.current || st.tg.queue?.length || queued || rows.some((r) => r.tg?.status === "running"));
   // Gọn: tiến độ + trạng thái Telegram nằm ở nút nhỏ 📤 trên thanh tiêu đề; thanh chi tiết chỉ hiện khi đang nhập.
   $("#tgpillCount").textContent = `${done}/${rows.length}`;
-  const dot = busy ? "busy" : bad ? "bad" : !c ? "" : c.telegram ? "on" : "off";
+  const dot = busy ? "busy" : bad ? "bad" : pc ? "on" : !c ? "" : c.telegram ? "on" : "off";
   $("#tgpillDot").className = "dot " + dot;
-  $("#tgpill").title = [
+  $("#tgpill").title = pc
+    ? `Nhập hệ thống PCBA: ${done}/${rows.length} dòng đã nhập${queued ? `, ${queued} chờ` : ""}${bad ? `, ${bad} lỗi (bấm để xem)` : ""}`
+    : [
     `Nhập bot PCBA-CCVN: ${done}/${rows.length} dòng đã nhập${queued ? `, ${queued} chờ` : ""}${bad ? `, ${bad} lỗi (bấm để xem)` : ""}`,
     !c ? "Đang kiểm tra Telegram…" : c.telegram ? "Telegram Web sẵn sàng" : `${c.edge ? "Edge mở nhưng chưa có tab Telegram" : "Chưa mở Edge cho bot"} — bấm để mở`,
     c && !c.playwright ? "Thiếu Playwright: pip install playwright" : "",
@@ -185,7 +211,7 @@ function renderTgBar() {
   el.hidden = !busy;
   el.classList.toggle("busy", busy);
   el.innerHTML = busy
-    ? `<div class="tgbar-head"><span class="tgbar-title">📤 Đang nhập bot</span>${conn}${warn}
+    ? `<div class="tgbar-head"><span class="tgbar-title">📤 Đang nhập${pc ? " PCBA" : " bot"}</span>${conn}${warn}
         <span class="tgcount">${queued ? `${queued} dòng chờ` : ""}</span><span class="grow"></span>${stopBtn()}</div>${job}`
     : "";
 }
@@ -193,7 +219,7 @@ function renderTgBar() {
 $("#tgpill").onclick = async () => {
   const c = st.tgConn;
   const bad = st.rows.some((r) => r.tg?.status === "error" || r.tg?.status === "uncertain");
-  if (c && !c.telegram) {
+  if (!isPcba() && c && !c.telegram) {
     toast("Đang mở Telegram Web cho bot…");
     try {
       const j = await API.post("api/tg/ensure");
@@ -202,7 +228,7 @@ $("#tgpill").onclick = async () => {
     return refreshTgStatus();
   }
   const todo = st.rows.filter((r) => r.tg?.status !== "done").length;
-  if (!todo && filter !== "tgtodo") return toast(`Cả ${st.rows.length} dòng đã nhập bot.`);
+  if (!todo && filter !== "tgtodo") return toast(`Cả ${st.rows.length} dòng đã nhập.`);
   filter = filter === "tgtodo" && !bad ? "all" : "tgtodo";
   pref.set("filter", filter);
   render();
@@ -222,7 +248,8 @@ async function refreshTgStatus() {
 let tgRowId = null;
 async function openTgConfirm(r) {
   tgRowId = r.id;
-  $("#tgTitle").textContent = `Nhập dòng #${rowNo(r)} lên bot PCBA-CCVN`;
+  const pc = isPcba();
+  $("#tgTitle").textContent = pc ? `Nhập dòng #${rowNo(r)} lên hệ thống PCBA` : `Nhập dòng #${rowNo(r)} lên bot PCBA-CCVN`;
   $("#tgBody").innerHTML = `<p class="muted">Đang kiểm tra dữ liệu…</p>`;
   $("#tgGo").disabled = true;
   $("#tgModal").hidden = false;
@@ -236,20 +263,29 @@ async function openTgConfirm(r) {
   if (tgRowId !== r.id) return;
   const t = pv.tg ?? {};
   const again = t.status === "done" || t.status === "uncertain";
-  const warnAgain = again
+  const pcNo = t.deviceCode || t.pcba?.ticketNo || "";
+  const warnAgain = again && pc
+    ? `<div class="tgwarn">Dòng này <b>đã nhập</b>: phiếu <b>${esc(pcNo)}</b>. Nhập lại sẽ tạo <b>thêm một phiếu mới</b>.
+        <label class="check-row"><input type="checkbox" id="tgForce"> Tôi đã kiểm tra, vẫn nhập lại</label></div>`
+    : !again && pc && t.status === "error" && pcNo
+    ? `<div class="tgwarn ok">Lần trước dừng giữa chừng: phiếu <b>${esc(pcNo)}</b> đã tạo — lần này sẽ <b>làm tiếp</b> các bước còn lại, không tạo phiếu mới.</div>`
+    : again
     ? `<div class="tgwarn">${t.status === "done" ? `Dòng này <b>đã nhập</b>: Repair #${esc(t.repairId)} · mã <b>${esc(t.deviceCode)}</b>.` : `Lần nhập trước dừng ở/ sau bước cuối — <b>có thể bot đã tạo Repair</b>. ${esc(t.error || "")}`}
         Nhập lại sẽ tạo <b>thêm một Repair mới</b>. Hãy kiểm tra chat bot trước.
         <label class="check-row"><input type="checkbox" id="tgForce"> Tôi đã kiểm tra, vẫn nhập lại</label></div>`
     : "";
   const errs = pv.errors.length ? `<ul class="tgerrs">${pv.errors.map((e) => `<li>${esc(e)}</li>`).join("")}</ul>` : "";
   const steps = `<ol class="tgsteps">${pv.steps.map((s) => `<li><span>${esc(s.label)}</span><b>${esc(s.value) || "<i>—</i>"}</b></li>`).join("")}</ol>`;
-  $("#tgBody").innerHTML = `${errs}<div id="tgConnBox"></div>${warnAgain}
+  $("#tgBody").innerHTML = pc
+    ? `${errs}${warnAgain}<p class="small">Hệ thống PCBA sẽ nhận lần lượt như trang <b>Nhận bo mạch</b>: tạo phiếu, ảnh, kết quả kiểm tra.
+      Số phiếu trả về được ghi vào dòng này. Lỗi giữa chừng thì bấm nhập lại để làm tiếp, không tạo phiếu trùng.</p>${steps}`
+    : `${errs}<div id="tgConnBox"></div>${warnAgain}
     <p class="small">Bot sẽ nhận lần lượt các giá trị dưới đây. <b>Bot không có bước xác nhận</b>: bước cuối tạo Repair ngay, mã thiết bị trả về được ghi vào dòng này.</p>${steps}`;
-  let ready = false;
+  let ready = pc;
   const sync = () => ($("#tgGo").disabled = pv.errors.length > 0 || !ready || (again && !$("#tgForce")?.checked));
   $("#tgForce")?.addEventListener("change", sync);
   sync();
-  if (pv.errors.length) return; // dữ liệu chưa đủ: chưa cần mở Telegram
+  if (pv.errors.length || pc) return; // dữ liệu chưa đủ / hệ thống PCBA: không cần mở Telegram
   // Tự mở Edge (profile riêng) + Telegram Web nếu chưa có, rồi kiểm tra đã đăng nhập chưa.
   const check = async () => {
     const box = $("#tgConnBox");
@@ -282,7 +318,7 @@ $("#tgGo").onclick = async () => {
   try {
     await API.post(`api/rows/${id}/tg`, { force: Boolean($("#tgForce")?.checked) });
     $("#tgModal").hidden = true;
-    toast("Đã đưa dòng vào hàng đợi nhập bot.");
+    toast("Đã đưa dòng vào hàng đợi nhập.");
   } catch (err) {
     fail(err);
     $("#tgGo").disabled = false;
@@ -302,6 +338,7 @@ document.addEventListener("click", async (e) => {
 
 function tgSection(r) {
   const t = r.tg ?? {};
+  if (isPcba()) return pcbaSection(r, t);
   const label = { queued: "⏳ Đang chờ nhập", running: "◌ Đang nhập", done: "✓ Đã nhập", error: "! Lỗi", uncertain: "? Cần kiểm tra chat bot" }[t.status] ?? "Chưa nhập";
   const prog = t.status === "running" ? `<div class="tgprog big"><i style="width:${tgPct(t)}%"></i></div><p class="small">Bước ${t.n || 0}/${t.total || "?"}: ${esc(t.step || "")} ${t.detail ? `— ${esc(t.detail)}` : ""}</p>` : "";
   const code = t.deviceCode
@@ -316,8 +353,69 @@ function tgSection(r) {
   return `<section><div class="sec-head"><h3>Bot Telegram <span class="pill">${label}</span></h3>${btn}</div>${code}${prog}${err}${hist}${log}</section>`;
 }
 
+function pcbaSection(r, t) {
+  const label = { queued: "⏳ Đang chờ nhập", running: "◌ Đang nhập", done: "✓ Đã nhập", error: "! Lỗi" }[t.status] ?? "Chưa nhập";
+  const no = t.deviceCode || t.pcba?.ticketNo || "";
+  const prog = t.status === "running" ? `<div class="tgprog big"><i style="width:${tgPct(t)}%"></i></div><p class="small">Bước ${t.n || 0}/${t.total || "?"}: ${esc(t.step || "")}</p>` : "";
+  const code = no ? `<div class="tgresult">Số phiếu <button class="devcode big" data-act2="copy-code">${esc(no)}</button> <span class="muted">${esc(t.pcba?.status || "")}</span></div>` : "";
+  const err = t.error ? `<p class="err-text small">${esc(t.error)}</p>` : "";
+  const note = t.pcba?.note ? `<p class="warn-text small">${esc(t.pcba.note)}</p>` : "";
+  const log = t.log?.length ? `<details class="tglog"><summary>Nhật ký (${t.log.length})</summary><pre>${esc(t.log.slice(-25).join("\n"))}</pre></details>` : "";
+  const btn = t.status === "queued"
+    ? `<button class="btn sm" data-act2="tg-cancel">Bỏ khỏi hàng đợi</button>`
+    : t.status === "running" ? stopBtn() : `<button class="btn sm ${t.status === "done" ? "" : "primary"}" data-act2="tg">📤 ${t.status === "done" ? "Nhập lại" : t.status === "error" ? (no ? "Tiếp tục" : "Thử lại") : "Nhập lên PCBA"}</button>`;
+  return `<section><div class="sec-head"><h3>Hệ thống PCBA <span class="pill">${label}</span></h3>${btn}</div>${code}${prog}${err}${note}${log}</section>`;
+}
+
+// ---------- Check SN bo mạch (quét QR) ----------
+/** Kết quả tra SN bo mạch trên hệ thống PCBA (hiện cạnh ô Check SN). */
+function snBadge(r, a = "data-act") {
+  const k = r.snCheck;
+  if (!r.values?.board_sn) return "";
+  const qr = r.qr?.source === "QR" ? `<span class="snsrc" title="SN đọc từ mã QR">QR</span>` : "";
+  if (!k) return `${qr}<button class="snchk" ${a}="sncheck" title="Tra SN này trên hệ thống PCBA">Check</button>`;
+  if (k.status === "checking") return `${qr}<span class="snchk run"><i class="spin">◌</i></span>`;
+  if (k.status === "error") return `${qr}<button class="snchk err" ${a}="sncheck" title="${esc(k.error)} — bấm để thử lại">! lỗi</button>`;
+  if (k.openTicketNo) return `${qr}<span class="snchk err" title="SN này đang có phiếu mở ${esc(k.openTicketNo)} — cập nhật trên phiếu đó, không tạo mới">⚠ ${esc(k.openTicketNo)}</span>`;
+  if (k.found) return `${qr}<span class="snchk ok" title="Bo đã có trên hệ thống: ${esc(k.boardModelCode)} ${esc(k.boardModelName)} · ${k.history} phiếu cũ">✓ ${esc(k.boardModelCode)}${k.history ? ` · ${k.history}` : ""}</span>`;
+  return `${qr}<span class="snchk new" title="Chưa có bo này trên hệ thống — sẽ tạo mới">mới</span>`;
+}
+
+/** Chụp ảnh mã QR trên bo -> đọc SN -> ghi vào dòng (server tự tra SN). */
+function scanQr(rowId) {
+  const inp = document.createElement("input");
+  inp.type = "file";
+  inp.accept = "image/*";
+  inp.capture = "environment";
+  inp.onchange = async () => {
+    const f = inp.files?.[0];
+    if (!f) return;
+    toast("Đang đọc mã QR…");
+    try {
+      const raw = await decodeFile(f);
+      if (!raw) return toast("Không thấy mã QR trong ảnh — chụp gần hơn, rõ nét, đủ sáng.", true);
+      await API.post(`api/rows/${rowId}/qr`, { raw });
+      toast(`SN bo mạch: ${raw.trim().slice(0, 60)}`);
+    } catch (err) {
+      fail(err);
+    }
+  };
+  inp.click();
+}
+
+// Bo đã có trên hệ thống mà ô Board còn trống: điền Board theo model đã đăng ký (một lần mỗi SN).
+const boardFilled = new Set();
+function autoBoardFromSn(r) {
+  const k = r.snCheck;
+  const code = k?.status === "ok" && k.boardModelCode;
+  if (!code || r.values?.board || boardFilled.has(r.id + k.sn)) return;
+  boardFilled.add(r.id + k.sn);
+  const label = BOARDS.find((b) => b.split(" - ")[0] === code) || code;
+  API.post(`api/rows/${r.id}/patch`, { values: { board: label } }).catch(() => {});
+}
+
 async function copyCode(r) {
-  const code = r.tg?.deviceCode;
+  const code = r.tg?.deviceCode || r.tg?.pcba?.ticketNo;
   if (!code) return;
   try {
     await navigator.clipboard.writeText(code);
@@ -368,7 +466,7 @@ function renderHead() {
       return `<th class="${c.db ? "aicol" : ""}" title="${esc(tip)}"><button data-fill="${c.key}" title="Điền nhanh cho nhiều dòng">${c.db ? "🤖 " : ""}${esc(c.label)}${st.colDefaults?.[c.key] ? " 📌" : ""}</button></th>`;
     })
     .join("");
-  $("#grid thead").innerHTML = `<tr><th class="sticky">#</th><th>Ảnh tem</th><th title="Đã kiểm tra">✓</th><th title="Khớp ccts_tickets.db">DB</th><th class="tgcol" title="Nhập lên bot PCBA-CCVN · mã thiết bị bot trả về">📤 Bot · Mã thiết bị</th>${cells}<th></th></tr>`;
+  $("#grid thead").innerHTML = `<tr><th class="sticky">#</th><th>Ảnh tem</th><th title="Đã kiểm tra">✓</th><th title="Khớp ccts_tickets.db">DB</th><th class="tgcol" title="${isPcba() ? "Nhập lên hệ thống PCBA · số phiếu trả về" : "Nhập lên bot PCBA-CCVN · mã thiết bị bot trả về"}">${isPcba() ? "📤 PCBA · Số phiếu" : "📤 Bot · Mã thiết bị"}</th>${cells}<th></th></tr>`;
 }
 
 function rowHtml(r) {
@@ -380,7 +478,9 @@ function rowHtml(r) {
       const { cls, tip } = cellState(r, c.key);
       const photo = c.photo
         ? `<div class="with-photo">${control(c, r)}<button class="cam" data-act="cam" data-kind="${c.photo.kind}" title="Chụp ${c.photo.name}">📷</button>${photoStrip(r, c.photo, 2)}</div>`
-        : control(c, r);
+        : c.qr
+          ? `<div class="with-photo">${control(c, r)}<button class="cam" data-act="qr" title="Chụp mã QR trên bo mạch để lấy SN">⌗</button>${snBadge(r)}</div>`
+          : control(c, r);
       return `<td class="cell ${c.wide ? "wide" : ""} ${c.options ? "opt" : ""} ${cls}" data-c="${ci}" title="${esc(tip || (c.wide ? r.values?.[c.key] ?? "" : ""))}">${photo}</td>`;
     })
     .join("");
@@ -416,6 +516,7 @@ function cardHtml(r) {
     <div class="card-main">
       <div class="card-title" data-act="open"><span class="no">#${rowNo(r)}</span> ${esc(title)} ${r.checked ? `<span class="ok-text">✓</span>` : ""}</div>
       <div class="card-sub" data-act="open">${esc([v.sn && v.ticket_id ? `SN ${v.sn}` : "", v.station_code, v.date_onsite, v.board && v.board.split(" - ")[0]].filter(Boolean).join(" · "))}</div>
+      <div class="card-sn">${inp("board_sn", "Check SN bo mạch")}<button class="btn sm qrbtn" data-act="qr" title="Chụp mã QR trên bo mạch">⌗ QR</button>${snBadge(r)}</div>
       ${inp("failure_cause", "failure_cause")}
       ${inp("disposition", "disposition")}
       <div class="card-tags">${statusPill(r)}${dbBadge(r)}${review}${res}${r.tg?.status === "done" ? `<span class="pill okp" title="Repair #${esc(r.tg.repairId)}">📤 ${esc(r.tg.deviceCode || "#" + r.tg.repairId)}</span>` : r.tg?.status === "running" ? `<span class="pill run">📤 ${r.tg.n || 0}/${r.tg.total || "?"}</span>` : r.tg?.status === "queued" ? `<span class="pill wait">📤 chờ</span>` : r.tg?.status === "error" || r.tg?.status === "uncertain" ? `<span class="pill err">📤 lỗi</span>` : ""}${v.failure_verification ? `<span class="pill res-${esc(v.failure_verification.toLowerCase())}" title="Failure verification">XM ${esc(v.failure_verification)}</span>` : ""}${r.vphotos?.length ? `<span class="pill" title="ảnh xác minh lỗi">🖼 XM ${r.vphotos.length}</span>` : ""}</div>
@@ -583,6 +684,7 @@ function onEvent(ev) {
       render();
     }
     if (openId === ev.row.id) renderDrawer();
+    autoBoardFromSn(ev.row);
     return;
   }
   if (ev.type === "delete") {
@@ -715,6 +817,8 @@ async function rowAction(act, r, el) {
     case "tg": return openTgConfirm(r);
     case "tg-cancel": return send(`api/rows/${r.id}/tgcancel`).catch(() => {});
     case "copy-code": return copyCode(r);
+    case "qr": return scanQr(r.id);
+    case "sncheck": return API.post(`api/rows/${r.id}/sncheck`).catch(fail);
   }
 }
 
@@ -893,6 +997,7 @@ function renderDrawer() {
   const repair = COLUMNS.filter((c) => c.group === "repair");
   const custom = st.cols.map((c) => ({ key: c.id, label: c.label, custom: true }));
   const field = (c) => `<label class="field ${cellState(r, c.key).cls}"><span>${esc(c.label)}</span>${control(c, r)}${
+    c.qr ? `<div class="snrow"><button type="button" class="btn sm" data-act2="qr">⌗ Quét QR trên bo</button>${snBadge(r, "data-act2")}</div>` : ""}${
     c.photo
       ? `<div class="photo-row">${(r[c.photo.field] ?? []).map((id, i) => `<button class="ph" data-ph="${i}" data-kind="${c.photo.kind}"><img src="${API.imgUrl(id)}" alt=""></button>`).join("")}
          <button class="ph add" data-act2="cam" data-kind="${c.photo.kind}">📷<small>Chụp</small></button><button class="ph add" data-act2="pick" data-kind="${c.photo.kind}">🖼️<small>Chọn</small></button></div>`
@@ -1098,7 +1203,7 @@ $("#drawer").addEventListener("click", async (e) => {
   const i = list.indexOf(r);
   switch (act) {
     case "view": case "cam-label": case "cam": case "pick": case "retry": case "del":
-    case "tg": case "tg-cancel": case "copy-code":
+    case "tg": case "tg-cancel": case "copy-code": case "qr": case "sncheck":
       return rowAction(act, r, actEl);
     case "research": return loadCandidates();
     case "rot": {
@@ -1443,7 +1548,39 @@ function settingsTab(name) {
   document.querySelectorAll("#settings [data-tab]").forEach((b) => b.classList.toggle("on", b.dataset.tab === name));
   document.querySelectorAll("#settings [data-tabpane]").forEach((p) => (p.hidden = p.dataset.tabpane !== name));
   if (name === "db") loadDbSync();
+  if (name === "pcba") fillPcbaFields();
 }
+function fillPcbaFields() {
+  if (!cfg) return;
+  $("#setPcbaUser").value = cfg.pcbaUser ?? "";
+  $("#setPcbaPass").value = "";
+  $("#setPcbaPass").placeholder = cfg.pcbaPassHint ? "Đã lưu (mã hoá) — để trống để giữ nguyên" : "mật khẩu hệ thống PCBA";
+  $("#setImportTarget").value = cfg.importTarget ?? "pcba";
+}
+$("#btnPcbaLogin").onclick = async () => {
+  const msg = $("#pcbaMsg");
+  const body = { pcbaUser: $("#setPcbaUser").value.trim(), importTarget: $("#setImportTarget").value };
+  if ($("#setPcbaPass").value) body.pcbaPass = $("#setPcbaPass").value;
+  $("#btnPcbaLogin").disabled = true;
+  msg.textContent = "Đang đăng nhập…";
+  try {
+    cfg = (await API.post("api/config", body)).config;
+    fillPcbaFields();
+    const j = await API.post("api/pcba/login", {});
+    msg.textContent = `✔ Đăng nhập được${j.name ? ` — ${j.name}` : ""}.`;
+  } catch (err) {
+    msg.textContent = `✖ ${err?.message || err}`;
+  } finally {
+    $("#btnPcbaLogin").disabled = false;
+    refreshTgStatus().then(render);
+  }
+};
+$("#setImportTarget").onchange = async () => {
+  try {
+    cfg = (await API.post("api/config", { importTarget: $("#setImportTarget").value })).config;
+  } catch (err) { fail(err); }
+  refreshTgStatus().then(render);
+};
 $("#settings").addEventListener("click", (e) => {
   const t = e.target.closest("[data-tab]")?.dataset.tab;
   if (t) settingsTab(t);
@@ -1574,6 +1711,7 @@ async function openSettings(tab = "ai") {
   $("#setConfirm").checked = cfg.aiConfirm !== false;
   showProviderFields();
   fillDbFields();
+  fillPcbaFields();
 }
 function formConfig() {
   const c = {

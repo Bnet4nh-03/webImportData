@@ -35,7 +35,10 @@ export const BOARDS = [
 
 export const CONTRACTORS = ["EC", "ES", "ITS", "HTE", "SE HN", "SE HCM"];
 export const RESULTS = ["PASS", "FAIL", "Discard"];
-export const STATION_STATUS = ["Pending", "OK"]; // nút của bot: ⏳ Pending / ✅ OK
+// Hệ thống PCBA: Kiểm tra tại trạm OK / FAIL / Not used / Not tested; Pending = để trống (chờ kiểm tra tại trạm).
+export const STATION_STATUS = ["Pending", "OK", "FAIL", "Not used", "Not tested"];
+// Lý do không có SN bo mạch (đúng 4 lựa chọn của trang Nhận bo mạch).
+export const SN_REASONS = ["Không có tem", "Tem hỏng", "Tem không đọc được", "Lý do khác"];
 export const VERIFY_STATUS = ["Pending", "PASS"];
 
 // Ảnh kèm theo cột: kind gửi lên server, field lưu trên dòng, tên hiển thị.
@@ -71,6 +74,9 @@ export function boardsForModel(model) {
 // `options`: danh sách chọn giống nút bấm của bot. `photo`: có nút chụp ảnh kèm theo.
 export const COLUMNS = [
   { key: "board", label: "Board", options: BOARDS, wide: true, group: "repair" },
+  // SN của BO MẠCH (quét QR trên bo) — khác SN trụ sạc trên tem. Tra trên hệ thống PCBA: đã có bo chưa, phiếu mở.
+  { key: "board_sn", label: "Check SN", qr: true, wide: true, group: "repair" },
+  { key: "sn_missing_reason", label: "Lý do không có SN", options: SN_REASONS, group: "repair" },
   { key: "contractor", label: "Contractor", options: CONTRACTORS, group: "repair" },
   { key: "test_tool_result", label: "test_tool_result", options: RESULTS, group: "repair" },
   { key: "failure_cause", label: "failure_cause", wide: true, group: "repair" },

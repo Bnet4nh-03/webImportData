@@ -777,3 +777,19 @@ details.adv > summary { cursor: pointer; }
 .zwrap:hover .zoombtns, .zwrap .zoombtns:focus-within { opacity: 1; }
 .zwrap .zoombtns .btn { background: rgba(15, 20, 24, .78); color: #fff; border-color: rgba(255,255,255,.18); backdrop-filter: blur(2px); }
 @media (hover: none) { .zwrap .zoombtns { opacity: .9; } }
+
+/* Check SN bo mạch (hệ thống PCBA): nút quét QR + kết quả tra SN */
+.snchk, .snsrc { display: inline-flex; align-items: center; gap: 2px; font-size: 11px; line-height: 1; padding: 3px 6px;
+  border-radius: 999px; border: 1px solid var(--border); background: var(--panel-2); color: var(--muted); white-space: nowrap; cursor: default; }
+button.snchk { cursor: pointer; font: inherit; font-size: 11px; }
+.snchk.ok { color: #1f9d55; border-color: color-mix(in srgb, #1f9d55 45%, transparent); }
+.snchk.new { color: var(--brand-2); border-color: color-mix(in srgb, var(--brand-2) 45%, transparent); }
+.snchk.err { color: #d64545; border-color: color-mix(in srgb, #d64545 45%, transparent); }
+.snsrc { font-weight: 700; color: var(--brand-2); }
+.snrow { display: flex; align-items: center; gap: 6px; margin-top: 6px; flex-wrap: wrap; }
+.card-sn { display: flex; gap: 4px; align-items: center; margin: 4px 0; }
+.card-sn .card-inp { flex: 1; min-width: 0; margin: 0; }
+.card-sn .qrbtn { white-space: nowrap; }
+.tgwarn.ok { border-color: color-mix(in srgb, var(--brand-2) 50%, transparent); background: color-mix(in srgb, var(--brand-2) 10%, transparent); }
+.card-sn { flex-wrap: wrap; }
+.card-sn .card-inp { flex: 1 1 110px; }

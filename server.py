@@ -33,6 +33,7 @@ import matching as M
 import ocr
 import ccts_login as CL
 import dbsync as DS
+import pcba_api as PB
 import telegram_bot as TG
 
 DEFAULT_DB = r"D:\00_WORKSPACE\01_Python\04_Takedata_CCVN\ccts_tickets.db"
@@ -45,7 +46,7 @@ STATIC = ("/index.html", "/css/", "/js/", "/favicon")
 FIXED_KEYS = (
     "board", "contractor", "test_tool_result", "failure_cause", "disposition", "after_repair_result",
     "charging_station_test_status", "ticket_id", "sn", "date_onsite", "original_phenomenon", "station_code",
-    "failure_verification",
+    "failure_verification", "board_sn", "sn_missing_reason",
 )
 # Ảnh kèm theo cột: kind -> (trường lưu danh sách ảnh trên dòng, tên file khi tải .zip)
 PHOTO_KINDS = {"after": ("photos", "sau_sua"), "verify": ("vphotos", "xac_minh")}
@@ -77,11 +78,16 @@ DEFAULT_CONFIG = {
     # Tự đăng nhập lấy cookie/token mỗi lần đồng bộ (mật khẩu mã hoá DPAPI, xem ccts_login.py).
     "cctsUser": "",
     "cctsPass": "",
+    # Nhập bo mạch: "pcba" = hệ thống PCBA Team (web, mặc định từ 26/10/2026), "telegram" = bot cũ.
+    "importTarget": "pcba",
+    "pcbaUser": "",
+    "pcbaPass": "",  # mã hoá DPAPI như cctsPass
+    "pcbaBase": PB.BASE,
     "cctsToolDir": DS.DEFAULT_TOOL_DIR,
     "cctsPageSize": 100,
     "cctsDelay": 3,
 }
-SECRET_KEYS = ("geminiKey", "cctsSso", "cctsToken", "cctsPass")  # không bao giờ gửi về trình duyệt
+SECRET_KEYS = ("geminiKey", "cctsSso", "cctsToken", "cctsPass", "pcbaPass")  # không bao giờ gửi về trình duyệt
 TG_ACTIVE = ("queued", "running")
 
 uid = lambda p: p + uuid.uuid4().hex[:10]  # noqa: E731
@@ -366,13 +372,16 @@ class Store:
     # ---------- Sửa dữ liệu ----------
     def patch(self, rid: str, body: dict) -> None:
         keys = self.allowed_keys()
-        rematch = False
+        rematch = snlook = False
         with self.lock:
             r = self.need(rid)
             for k, v in (body.get("values") or {}).items():
                 if k not in keys:
                     continue
                 v = str(v)[:2000]
+                if k == "board_sn" and v != r["values"].get(k, ""):
+                    r["qr"], r["snCheck"] = {"source": "MANUAL"}, None  # gõ tay: không còn là SN quét QR
+                    snlook = bool(v.strip())
                 r["values"][k] = v
                 r["edited"][k] = True
                 r["flags"].pop(k, None)
@@ -385,6 +394,48 @@ class Store:
             self.emit_row(r)
         if rematch and body.get("commit") and (r.get("match") or {}).get("how") != "manual":
             self.match(rid)
+        if snlook and body.get("commit"):
+            threading.Thread(target=self.sn_check, args=(rid,), daemon=True).start()
+
+    # ---------- Check SN bo mạch (hệ thống PCBA) ----------
+    def set_qr(self, rid: str, raw: str) -> None:
+        """SN đọc từ mã QR trên bo mạch (quét bằng camera trên web)."""
+        sn = PB.norm_sn(raw)
+        if not sn:
+            raise ValueError("Mã QR trống.")
+        with self.lock:
+            r = self.need(rid)
+            r["values"]["board_sn"] = sn
+            r["values"]["sn_missing_reason"] = ""
+            r["edited"]["board_sn"] = True
+            r["qr"] = {"source": "QR", "raw": str(raw)[:500]}
+            r["snCheck"] = None
+            self.emit_row(r)
+        threading.Thread(target=self.sn_check, args=(rid,), daemon=True).start()
+
+    def sn_check(self, rid: str) -> None:
+        """Tra SN bo mạch trên hệ thống PCBA: đã có bo này chưa, model gì, có phiếu đang mở không."""
+        with self.lock:
+            r = self.find(rid)
+            sn = ((r or {}).get("values") or {}).get("board_sn", "").strip()
+            if not r:
+                return
+            if not sn:
+                r["snCheck"] = None
+                self.emit_row(r)
+                return
+            r["snCheck"] = {"status": "checking", "sn": sn}
+            self.emit_row(r)
+        try:
+            info = {"status": "ok", **PB.lookup(pcba.client(), PB.norm_sn(sn))}
+        except (PB.PcbaError, CL.LoginError) as e:
+            info = {"status": "error", "sn": sn, "error": str(e)}
+        with self.lock:
+            r = self.find(rid)
+            if not r or r["values"].get("board_sn", "").strip() != sn:
+                return  # SN đã đổi trong lúc kiểm tra
+            r["snCheck"] = {**info, "at": int(time.time() * 1000)}  # web tự điền Board theo model (nếu ô Board trống)
+            self.emit_row(r)
 
     def patch_many(self, changes: list[dict]) -> int:
         """Dán / điền / xoá nhiều ô cùng lúc (kiểu Excel): [{id, values}] -> ghi file một lần, rồi đối chiếu lại
@@ -399,6 +450,8 @@ class Store:
                 for k, v in (ch.get("values") or {}).items():
                     if k not in keys:
                         continue
+                    if k == "board_sn" and str(v) != r["values"].get(k, ""):
+                        r["qr"], r["snCheck"] = {"source": "MANUAL"}, None
                     r["values"][k] = str(v)[:2000]
                     r["edited"][k] = True
                     r["flags"].pop(k, None)
@@ -597,12 +650,34 @@ class Store:
             date_format=self.config["dateFormat"],
         )
 
+    def pcba_job(self, r: dict) -> PB.Job:
+        img = lambda i: str(IMAGES / f"{i}.jpg")  # noqa: E731
+        qr = r.get("qr") or {}
+        return PB.Job(
+            values=dict(r["values"]),
+            photos_before=[img(r["image"])] if r.get("image") else [],  # ảnh tem = ảnh TRƯỚC KHI KIỂM TRA
+            photos_after=[img(i) for i in r.get("photos", [])],
+            photos_verify=[img(i) for i in r.get("vphotos", [])],
+            qr_raw=qr.get("raw"), sn_source="QR" if qr.get("source") == "QR" else "MANUAL",
+            date_format=self.config["dateFormat"],
+        )
+
+    def use_pcba(self) -> bool:
+        return self.config.get("importTarget", "pcba") == "pcba"
+
+    def import_check(self, r: dict) -> tuple[list[str], list[dict]]:
+        if self.use_pcba():
+            job = self.pcba_job(r)
+            return PB.validate(job), PB.preview(job)
+        job = self.tg_job(r)
+        return TG.validate(job), TG.preview(job)
+
     def tg_preview(self, rid: str) -> dict:
         with self.lock:
             r = self.need(rid)
-            job = self.tg_job(r)
+            errors, steps = self.import_check(r)
             tg = dict(r.get("tg") or {})
-        return {"errors": TG.validate(job), "steps": TG.preview(job), "tg": tg}
+        return {"errors": errors, "steps": steps, "tg": tg, "target": "pcba" if self.use_pcba() else "telegram"}
 
     def tg_enqueue(self, rid: str, force: bool) -> None:
         with self.lock:
@@ -611,8 +686,8 @@ class Store:
             if tg.get("status") in TG_ACTIVE:
                 raise ValueError("Dòng này đang chờ/đang nhập.")
             if tg.get("status") in ("done", "uncertain") and not force:
-                raise ValueError("Dòng này đã nhập lên bot (hoặc có thể đã tạo). Nhập lại sẽ tạo thêm một Repair mới.")
-            errs = TG.validate(self.tg_job(r))
+                raise ValueError("Dòng này đã nhập (hoặc có thể đã tạo). Nhập lại sẽ tạo thêm một phiếu mới.")
+            errs, _ = self.import_check(r)
             if errs:
                 raise ValueError(" ".join(errs))
             hist = list(tg.get("history") or [])
@@ -621,7 +696,10 @@ class Store:
             # Lần trước lỗi: giữ đuôi nhật ký lần đó để còn biết vì sao (trước đây lần nhập lại xoá mất).
             prev = (tg.get("log") or [])[-15:] if tg.get("status") in ("error", "uncertain") else []
             log = [*prev, "──── nhập lại ────"] if prev else []
-            r["tg"] = {"status": "queued", "at": int(time.time() * 1000), "log": log, "history": hist}
+            # PCBA: lần trước lỗi giữa chừng -> giữ tiến độ (id phiếu, bước đã xong) để làm tiếp, không tạo phiếu mới.
+            prog = tg.get("pcba") if tg.get("status") in ("error", "") and (tg.get("pcba") or {}).get("id") else None
+            r["tg"] = {"status": "queued", "at": int(time.time() * 1000), "log": log, "history": hist,
+                       **({"pcba": prog} if prog else {})}
             self.emit_row(r)
         tgworker.push(rid)
 
@@ -927,6 +1005,8 @@ class TelegramWorker:
                 self.status()
 
     def run_one(self, rid: str, should_stop=lambda: False) -> None:
+        if store.use_pcba():
+            return self.run_pcba(rid, should_stop)
         with store.lock:
             r = store.find(rid)
             if not r or (r.get("tg") or {}).get("status") != "queued":
@@ -976,6 +1056,68 @@ class TelegramWorker:
         self.journal({"row": rid, "no": row_no, "event": "done", **{k: res[k] for k in ("repair_id", "device_code", "board", "message_id")}})
 
 
+    def run_pcba(self, rid: str, should_stop=lambda: False) -> None:
+        with store.lock:
+            r = store.find(rid)
+            if not r or (r.get("tg") or {}).get("status") != "queued":
+                return
+            job = store.pcba_job(r)
+            prog = json.loads(json.dumps((r.get("tg") or {}).get("pcba") or {}))
+            row_no = store.rows.index(r) + 1
+        steps = [k for k, _ in PB.plan_steps(job)]
+        resume = bool(prog.get("id"))
+        store.tg_update(rid, f"Tiếp tục phiếu {prog.get('ticketNo')}" if resume else "Bắt đầu nhập lên hệ thống PCBA",
+                        status="running", error="", step="", n=0, stopping=False, total=len(steps),
+                        started=int(time.time() * 1000), pcba=prog)
+        self.journal({"row": rid, "no": row_no, "event": "start", "target": "pcba", "resume": resume, "values": job.values})
+
+        def step(key: str, label: str) -> None:
+            n = steps.index(key) + 1 if key in steps else 0
+            store.tg_update(rid, label, step=label, n=n, total=len(steps))
+
+        def save(p: dict) -> None:
+            store.tg_update(rid, pcba=json.loads(json.dumps(p)), deviceCode=p.get("ticketNo", ""))
+
+        try:
+            res = PB.submit(pcba.client(), job, prog, save=save, step=step, stop=should_stop)
+        except (PB.PcbaError, CL.LoginError) as e:
+            store.tg_update(rid, f"LỖI: {e}", status="error", error=str(e), stopping=False, at=int(time.time() * 1000),
+                            pcba=prog)
+            self.journal({"row": rid, "no": row_no, "event": "error", "target": "pcba", "error": str(e),
+                          "ticketNo": prog.get("ticketNo")})
+            return
+        except Exception as e:  # noqa: BLE001
+            store.tg_update(rid, f"LỖI: {e}", status="error", error=f"Lỗi: {e}", at=int(time.time() * 1000), pcba=prog)
+            self.journal({"row": rid, "no": row_no, "event": "error", "target": "pcba", "error": str(e)})
+            return
+        note = f" · {res['note']}" if res.get("note") else ""
+        store.tg_update(rid, f"✅ Phiếu {res.get('ticketNo')} · trạng thái {res.get('status') or '?'}{note}", status="done",
+                        repairId=str(res.get("id") or ""), deviceCode=res.get("ticketNo") or "", result=job.result,
+                        pcba=res, at=int(time.time() * 1000))
+        self.journal({"row": rid, "no": row_no, "event": "done", "target": "pcba", "id": res.get("id"),
+                      "ticketNo": res.get("ticketNo"), "status": res.get("status")})
+
+
+class PcbaSession:
+    """Một phiên đăng nhập hệ thống PCBA dùng chung (cookie); tạo lại khi đổi tài khoản."""
+
+    def __init__(self):
+        self.lock = threading.Lock()
+        self._c: PB.Client | None = None
+
+    def reset(self) -> None:
+        with self.lock:
+            self._c = None
+
+    def client(self) -> PB.Client:
+        with self.lock:
+            if not self._c:
+                c = store.config
+                self._c = PB.Client(c.get("pcbaUser", ""), CL.unprotect(c.get("pcbaPass", "")),
+                                    c.get("pcbaBase") or PB.BASE)
+            return self._c
+
+
 # ---------- HTTP ----------
 
 def lan_urls(port: int) -> list[str]:
@@ -1002,6 +1144,7 @@ def public_config(c: dict) -> dict:
         v = c.get(key) or ""
         out[key + "Hint"] = ("••••" + v[-4:]) if v else ""
     out["cctsPassHint"] = "••••••" if c.get("cctsPass") else ""  # bản mã hoá: không hé lộ ký tự nào
+    out["pcbaPassHint"] = "••••••" if c.get("pcbaPass") else ""
     return out
 
 
@@ -1074,7 +1217,10 @@ class Handler(SimpleHTTPRequestHandler):
             if p == "/api/dbsync":
                 return self._json(200, {"ok": True, **dbsync.snapshot(), "db": DS.db_info(index.db_path)})
             if p == "/api/tg/status":
-                return self._json(200, {"ok": True, **TG.cdp_status(store.config["tgCdp"]),
+                if store.use_pcba():  # hệ thống PCBA: không cần Edge / Telegram Web
+                    return self._json(200, {"ok": True, "target": "pcba", "current": tgworker.current,
+                                            "queue": list(tgworker.q)})
+                return self._json(200, {"ok": True, "target": "telegram", **TG.cdp_status(store.config["tgCdp"]),
                                         "edgePath": TG.find_edge(), "playwright": _has_playwright(),
                                         "current": tgworker.current, "queue": list(tgworker.q)})
             if p == "/api/photos.zip":
@@ -1200,6 +1346,10 @@ class Handler(SimpleHTTPRequestHandler):
                     store.tg_enqueue(rid, bool(body.get("force")))
                 elif act == "tgcancel":
                     store.tg_dequeue(rid)
+                elif act == "qr":
+                    store.set_qr(rid, str(body.get("raw") or ""))
+                elif act == "sncheck":
+                    threading.Thread(target=store.sn_check, args=(rid,), daemon=True).start()
                 else:
                     raise KeyError("Thao tác không hợp lệ")
                 return self._json(200, {"ok": True})
@@ -1230,6 +1380,14 @@ class Handler(SimpleHTTPRequestHandler):
                              c.get("cctsToolDir") or DS.DEFAULT_TOOL_DIR, int(c.get("cctsPageSize") or 100),
                              float(c.get("cctsDelay") if c.get("cctsDelay") is not None else 3), login=login)
                 return self._json(200, {"ok": True, "login": bool(login)})
+            if p == "/api/pcba/login":
+                pcba.reset()
+                try:
+                    me = pcba.client().login()
+                except (PB.PcbaError, CL.LoginError) as e:
+                    return self._json(200, {"ok": False, "error": str(e)})
+                user = (me or {}).get("user") or me or {}
+                return self._json(200, {"ok": True, "name": user.get("displayName") or user.get("username") or ""})
             if p == "/api/dbsync/login":
                 try:
                     ccts_login()
@@ -1282,6 +1440,14 @@ class Handler(SimpleHTTPRequestHandler):
         for k in ("cctsSso", "cctsToken"):  # chỉ gửi khi người dùng gõ giá trị mới / xoá
             if k in body:
                 c[k] = str(body[k] or "").strip()
+        if "pcbaUser" in body:
+            c["pcbaUser"] = str(body["pcbaUser"] or "").strip()
+            pcba.reset()
+        if "pcbaPass" in body:
+            c["pcbaPass"] = CL.protect(str(body["pcbaPass"] or ""))
+            pcba.reset()
+        if body.get("importTarget") in ("pcba", "telegram"):
+            c["importTarget"] = body["importTarget"]
         if "cctsUser" in body:
             c["cctsUser"] = str(body["cctsUser"] or "").strip()
         if "cctsPass" in body:  # chỉ gửi khi người dùng gõ mật khẩu mới / xoá
@@ -1337,6 +1503,7 @@ index: M.TicketIndex
 store: Store
 worker = Worker()
 tgworker = TelegramWorker()
+pcba = PcbaSession()
 
 
 def _after_dbsync(status: str) -> None:

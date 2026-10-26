@@ -21,6 +21,7 @@ class TestServerTelegram(unittest.TestCase):
         S.IMAGES = S.DATA / "images"
         S.index = M.TicketIndex(str(S.DATA / "khong_co.db"))
         S.store = S.Store(S.hub, S.index)
+        S.store.config["importTarget"] = "telegram"  # các test này cho bot Telegram cũ
         cls.bots = []
         S.tgworker.driver_factory = lambda cfg, log: cls.bots.append(FakeBot()) or cls.bots[-1]
         S.tgworker.start()

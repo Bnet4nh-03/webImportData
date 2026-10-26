@@ -182,6 +182,7 @@
       <div class="tabs" role="tablist">
         <button type="button" class="tab on" data-tab="ai">🤖 Đọc tem</button>
         <button type="button" class="tab" data-tab="db">🗄 Đồng bộ DB ticket</button>
+        <button type="button" class="tab" data-tab="pcba">📤 Nhập PCBA</button>
       </div>
       <div data-tabpane="ai">
       <p class="note">Cài đặt lưu trên máy tính chạy server và dùng chung cho mọi thiết bị. Điện thoại không cần nhập key.</p>
@@ -253,6 +254,27 @@
         <button type="submit" class="btn primary">Lưu</button>
       </div>
           </div>
+      <div data-tabpane="pcba" hidden>
+        <p class="note">Nút <b>📤 Nhập</b> trên mỗi dòng tạo phiếu trên hệ thống <b>PCBA Team</b>
+          (<code>pcba.pcba-api.workers.dev/intake</code>) giống trang <b>Nhận bo mạch</b>: Check SN bo mạch (QR), ảnh trước kiểm tra,
+          kết quả kiểm tra, nguyên nhân + xử lý, ảnh sau sửa, kiểm tra lại, kiểm tra tại trạm. Số phiếu trả về ghi vào cột 📤.
+          Mật khẩu lưu mã hoá (Windows DPAPI) trong <code>data/config.json</code> trên máy chạy server, không gửi về trình duyệt.
+          Sai mật khẩu 5 lần liền thì tài khoản bị khoá 15 phút.</p>
+        <div class="grid2">
+          <label class="field"><span>Tài khoản PCBA</span>
+            <input id="setPcbaUser" autocomplete="off" spellcheck="false"></label>
+          <label class="field"><span>Mật khẩu</span>
+            <input id="setPcbaPass" type="password" autocomplete="new-password" spellcheck="false"></label>
+        </div>
+        <div class="actions left">
+          <button type="button" class="btn primary" id="btnPcbaLogin">🔑 Lưu &amp; thử đăng nhập</button>
+          <span id="pcbaMsg" class="small muted"></span>
+        </div>
+        <details class="adv"><summary class="small muted">Nâng cao</summary>
+          <label class="field"><span>Nhập lên</span>
+            <select id="setImportTarget"><option value="pcba">Hệ thống PCBA (web, mới)</option><option value="telegram">Bot Telegram PCBA-CCVN (cũ)</option></select></label>
+        </details>
+      </div>
       <div data-tabpane="db" hidden>
         <div id="dbInfo" class="dbinfo muted small">Đang đọc DB…</div>
         <p class="note">Lấy ticket mới từ web <b>console.cnpowercore.com</b> vào <code>ccts_tickets.db</code> để app khớp được tem mới.

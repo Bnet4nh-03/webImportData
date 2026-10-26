@@ -131,7 +131,24 @@ Dùng tool `D: _WORKSPACE_Python_Takedata_CCVN` (chạy ngầm, không sửa f
 2. **Lấy ticket mới** (hằng ngày). *Tiếp tục* / *Quét lại toàn bộ* nằm trong mục nâng cao. *Kiểm tra kết nối*: 4 request, không ghi DB.
 3. Xong: server tự nạp lại DB và khớp lại các dòng chưa khớp. Khi DB cũ hơn 2 ngày, đầu trang hiện nhắc ⟳ Cập nhật.
 
-## Nhập lên bot Telegram PCBA-CCVN (từng dòng)
+## Nhập lên hệ thống PCBA (thay bot Telegram từ 26/10/2026)
+
+Nút **📤 Nhập** trên mỗi dòng tạo phiếu trên **https://pcba.pcba-api.workers.dev/intake** (`pcba_api.py`), đúng các bước
+của trang *Nhận bo mạch*: Check SN bo mạch → tạo phiếu → ảnh trước kiểm tra (ảnh tem) → ảnh xác minh lỗi → kiểm tra ban đầu
+(PASS / FAIL / Discard) → FAIL: nguyên nhân (`failure_cause`) + xử lý (`disposition` = ghi chú, loại = Sửa chữa) → ảnh sau sửa
+→ kiểm tra lại (`after_repair_result`) → kiểm tra tại trạm (`charging_station_test_status`: OK / FAIL / Not used / Not tested;
+Pending = để trống). Số phiếu trả về hiện ở cột **📤 PCBA · Số phiếu**. SN trụ sạc (cột SN) ghi vào *Ghi chú chi tiết*.
+
+- **⚙️ → 📤 Nhập PCBA**: nhập tài khoản + mật khẩu → *Lưu & thử đăng nhập*. Mật khẩu mã hoá DPAPI trong `data/config.json`.
+  Sai 5 lần liền thì tài khoản bị khoá 15 phút. Mục *Nâng cao* chuyển lại bot Telegram cũ nếu cần.
+- **Check SN** = SN **bo mạch** (khác SN trụ sạc trên tem). Bấm **⌗ / ⌗ QR** để chụp mã QR trên bo: web đọc mã ngay trên máy
+  (BarcodeDetector hoặc `js/vendor/jsQR.js`), ghi SN rồi tự tra trên hệ thống: `✓ model · n` (bo đã có, n phiếu cũ — ô Board
+  trống thì tự điền), `mới` (bo chưa có), `⚠ số phiếu` (bo đang có phiếu mở → không tạo mới). Gõ tay SN cũng được.
+- **Lý do không có SN**: Không có tem / Tem hỏng / Tem không đọc được / Lý do khác (bắt buộc khi không có SN).
+- Discard cần lý do: lấy từ cột `disposition` (hoặc `failure_cause`).
+- Lỗi giữa chừng: bấm **📤 Tiếp tục** — làm tiếp từ bước dở (nhớ id phiếu + Idempotency-Key), không tạo phiếu trùng.
+
+## Nhập lên bot Telegram PCBA-CCVN (cũ, chọn trong ⚙️ → Nhập PCBA → Nâng cao)
 
 Mỗi dòng có cột **📤 Bot · Mã thiết bị**. Bấm **📤 Nhập bot**, xem lại các giá trị sẽ gửi, rồi bấm **Tạo Repair trên bot**.
 Server tự đi hết các bước của bot (/repair → Thêm mới → Board → … → ảnh xác minh lỗi). Khi bot trả về
