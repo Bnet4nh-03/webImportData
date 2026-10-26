@@ -171,7 +171,10 @@ class Client:
         self.base, self.timeout = base.rstrip("/"), timeout
         self.username, self.password = (username or "").strip(), password or ""
         self.s = session or requests.Session()
-        self.s.headers.update({"Accept": "application/json", "Accept-Language": "vi"})
+        # Hệ thống chặn yêu cầu không có nguồn gửi (HTTP 403 "nguồn gửi không hợp lệ"): gửi Origin/Referer của
+        # chính trang /intake như trình duyệt vẫn tự gửi khi đăng nhập trên web.
+        self.s.headers.update({"Accept": "application/json", "Accept-Language": "vi", "Origin": self.base,
+                               "Referer": f"{self.base}/intake"})
         self.logged_in = False
 
     def login(self) -> dict:

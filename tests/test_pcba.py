@@ -168,6 +168,11 @@ class TestPcba(unittest.TestCase):
         self.assertEqual(tr, [{"version": 1, "event": "initial_test", "result": "DISCARD", "reason": "Cháy IC nguồn"}])
         self.assertEqual(prog["status"], "DISCARDED")
 
+    def test_sends_origin_like_browser(self):
+        c = PB.Client("kythuat", "mk123", session=FakePcba())
+        self.assertEqual(c.s.headers["Origin"], PB.BASE)  # thiếu Origin: hệ thống trả 403 BAD_ORIGIN
+        self.assertTrue(c.s.headers["Referer"].startswith(PB.BASE))
+
     def test_wrong_password(self):
         with self.assertRaisesRegex(PB.PcbaError, "Sai tài khoản"):
             PB.Client("kythuat", "sai", session=FakePcba()).login()
