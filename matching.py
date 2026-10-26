@@ -19,7 +19,6 @@ import time
 from collections import defaultdict
 from datetime import date, timedelta
 from pathlib import Path
-from typing import Callable
 
 # ---------- Chuẩn hóa mã ----------
 
@@ -75,8 +74,10 @@ class NearIndex:
     lệch 1 ký tự thêm/bớt thì k ký tự đầu hoặc k ký tự cuối chắc chắn trùng. Chỉ so kỹ các chuỗi trùng khúc đó.
     Kết quả giữ đúng thứ tự trong danh sách gốc (như khi duyệt tuần tự)."""
 
-    def __init__(self, items_by_len: dict[int, list], key: Callable[[object], str], ham: int):
-        self.items, self.key, self.ham = items_by_len, key, ham
+    def __init__(self, items_by_len: dict[int, list], field: int | None, ham: int):
+        """field: phần tử là tuple -> so chuỗi ở vị trí field; None -> phần tử chính là chuỗi (lưu cache được, khác lambda)."""
+        self.items, self.field, self.ham = items_by_len, field, ham
+        key = self.key
         idx: dict[tuple, list[int]] = defaultdict(list)
         for ln, items in items_by_len.items():
             ks = {_end_k(ln), _end_k(ln - 1)}
@@ -88,6 +89,9 @@ class NearIndex:
                     idx[(ln, "<", s[:k])].append(i)
                     idx[(ln, ">", s[-k:])].append(i)
         self.idx = dict(idx)
+
+    def key(self, it) -> str:
+        return it if self.field is None else it[self.field]
 
     def same_len(self, q: str, k: int) -> list:
         """Cùng độ dài, lệch tối đa k ký tự (k <= ham)."""
@@ -320,8 +324,9 @@ def slim(j: dict) -> dict:
 class TicketIndex:
     """Chỉ mục trong RAM: mã ticket và SN đã chuẩn hóa -> khóa ticket. Tự nạp lại khi DB thay đổi."""
 
-    def __init__(self, db_path: str):
+    def __init__(self, db_path: str, cache_path: str | Path | None = None):
         self.db_path = db_path
+        self.cache_path = cache_path
         self.lock = threading.Lock()
         self.loaded_mtime = 0.0
         self.checked_at = 0.0
@@ -367,6 +372,8 @@ class TicketIndex:
             self.checked_at = now
             mtime = self._mtime()
             if self.count and mtime == self.loaded_mtime:
+                return
+            if self._load_cache(mtime):
                 return
             t0 = time.time()
             by_id: dict[str, list[str]] = defaultdict(list)
@@ -420,15 +427,58 @@ class TicketIndex:
             self.by_sn, self.sns_by_len = dict(by_sn), dict(sns_by_len)
             self.by_tail4, self.by_tail3, self.pk_station = dict(by_tail4), dict(by_tail3), pk_station
             self.heads_by_day = dict(heads)
-            self.near_ids = NearIndex(self.ids_by_len, lambda it: it[0], 2)
-            self.near_sns = NearIndex(self.sns_by_len, lambda n: n, 1)
+            self.near_ids = NearIndex(self.ids_by_len, 0, 2)
+            self.near_sns = NearIndex(self.sns_by_len, None, 1)
             st_by_len: dict[int, list[tuple[int, str]]] = defaultdict(list)
             for i, k in enumerate(self.by_station):
                 st_by_len[len(k)].append((i, k))
-            self.near_st = NearIndex(dict(st_by_len), lambda it: it[1], 1)
+            self.near_st = NearIndex(dict(st_by_len), 1, 1)
             self.count = len(rows)
             self.loaded_mtime = mtime
             print(f"[db] {self.count:,} ticket, {len(by_sn):,} SN — {time.time() - t0:.1f}s", flush=True)
+            self._save_cache(mtime)
+
+    # ---------- Cache chỉ mục ra file: khởi động / sau đồng bộ không phải dựng lại từ 390 nghìn ticket ----------
+    CACHE_VERSION = 1
+    CACHE_ATTRS = ("by_id", "ids_by_len", "by_sn", "sns_by_len", "raw_ids_by_len", "raw_sns_by_len", "raw_sn_norm",
+                   "by_station", "by_tail4", "by_tail3", "pk_station", "heads_by_day", "near_ids", "near_sns", "near_st",
+                   "count")
+
+    def _cache_key(self, mtime: float) -> tuple:
+        p = Path(self.db_path)
+        return (self.CACHE_VERSION, str(p.resolve()), mtime, p.stat().st_size)
+
+    def _save_cache(self, mtime: float) -> None:
+        if not self.cache_path:
+            return
+        import pickle
+        tmp = Path(str(self.cache_path) + ".tmp")
+        try:
+            with open(tmp, "wb") as f:
+                pickle.dump((self._cache_key(mtime), {a: getattr(self, a) for a in self.CACHE_ATTRS}), f, protocol=5)
+            tmp.replace(self.cache_path)
+        except (OSError, pickle.PickleError, RecursionError) as e:
+            print(f"[db] không ghi được cache chỉ mục: {e}", flush=True)
+            tmp.unlink(missing_ok=True)
+
+    def _load_cache(self, mtime: float) -> bool:
+        if not self.cache_path or not Path(self.cache_path).exists():
+            return False
+        import pickle
+        t0 = time.time()
+        try:
+            with open(self.cache_path, "rb") as f:
+                key, data = pickle.load(f)
+        except Exception as e:  # noqa: BLE001 - cache hỏng / phiên bản cũ: dựng lại từ DB
+            print(f"[db] bỏ cache chỉ mục ({type(e).__name__})", flush=True)
+            return False
+        if key != self._cache_key(mtime):
+            return False
+        for a in self.CACHE_ATTRS:
+            setattr(self, a, data[a])
+        self.loaded_mtime = mtime
+        print(f"[db] {self.count:,} ticket, {len(self.by_sn):,} SN — {time.time() - t0:.1f}s (cache)", flush=True)
+        return True
 
     def _fuzzy_ids(self, q: str) -> list[str]:
         if len(q) < 6:

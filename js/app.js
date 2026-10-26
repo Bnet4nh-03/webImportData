@@ -1,5 +1,5 @@
 // Giao diện. Dữ liệu nằm trên server.py; mọi thiết bị mở web đều thấy cùng một bảng theo thời gian thực.
-import { BOARDS, COLUMNS, COMPARE_KEYS, DATE_FORMATS, PHOTO, boardsForModel } from "./columns.js";
+import { BOARDS, COLUMNS, COMPARE_KEYS, DATE_FORMATS, PART_ACTIONS, PHOTO, boardsForModel, formatParts, parseParts } from "./columns.js";
 import * as API from "./api.js";
 import * as IMG from "./image.js";
 import { exportXlsx, toTsv } from "./excel.js";
@@ -365,6 +365,16 @@ function pcbaSection(r, t) {
     ? `<button class="btn sm" data-act2="tg-cancel">Bỏ khỏi hàng đợi</button>`
     : t.status === "running" ? stopBtn() : `<button class="btn sm ${t.status === "done" ? "" : "primary"}" data-act2="tg">📤 ${t.status === "done" ? "Nhập lại" : t.status === "error" ? (no ? "Tiếp tục" : "Thử lại") : "Nhập lên PCBA"}</button>`;
   return `<section><div class="sec-head"><h3>Hệ thống PCBA <span class="pill">${label}</span></h3>${btn}</div>${code}${prog}${err}${note}${log}</section>`;
+}
+
+// ---------- Vị trí đã xử lý (như trang web: U12, C46 + Sửa chữa / Thay thế / Tháo bỏ) ----------
+function partsEditor(r) {
+  const list = parseParts(r.values?.components);
+  const chips = list.map((c, i) => `<span class="part">${esc(c.ref)} · ${esc(c.action)}<button type="button" class="part-x" data-act2="parts-del" data-i="${i}" aria-label="Xoá">×</button></span>`).join("");
+  return `<div class="parts-edit">${chips ? `<div class="parts">${chips}</div>` : ""}
+    <div class="parts-add"><input data-parts-new placeholder="Ví dụ: U12, C46" autocomplete="off" autocapitalize="characters">
+      <select data-parts-act>${PART_ACTIONS.map((a) => `<option>${a}</option>`).join("")}</select>
+      <button type="button" class="btn sm" data-act2="parts-add">+ Thêm</button></div></div>`;
 }
 
 // ---------- Check SN bo mạch (quét QR) ----------
@@ -998,6 +1008,7 @@ function renderDrawer() {
   const custom = st.cols.map((c) => ({ key: c.id, label: c.label, custom: true }));
   const field = (c) => `<label class="field ${cellState(r, c.key).cls}"><span>${esc(c.label)}</span>${control(c, r)}${
     c.qr ? `<div class="snrow"><button type="button" class="btn sm" data-act2="qr">⌗ Quét QR trên bo</button>${snBadge(r, "data-act2")}</div>` : ""}${
+    c.parts ? partsEditor(r) : ""}${
     c.photo
       ? `<div class="photo-row">${(r[c.photo.field] ?? []).map((id, i) => `<button class="ph" data-ph="${i}" data-kind="${c.photo.kind}"><img src="${API.imgUrl(id)}" alt=""></button>`).join("")}
          <button class="ph add" data-act2="cam" data-kind="${c.photo.kind}">📷<small>Chụp</small></button><button class="ph add" data-act2="pick" data-kind="${c.photo.kind}">🖼️<small>Chọn</small></button></div>`
@@ -1205,6 +1216,21 @@ $("#drawer").addEventListener("click", async (e) => {
     case "view": case "cam-label": case "cam": case "pick": case "retry": case "del":
     case "tg": case "tg-cancel": case "copy-code": case "qr": case "sncheck":
       return rowAction(act, r, actEl);
+    case "parts-add": {
+      const box = actEl.closest(".parts-edit");
+      const refs = box.querySelector("[data-parts-new]").value;
+      const action = box.querySelector("[data-parts-act]").value;
+      const add = parseParts(refs).map((c) => ({ ref: c.ref, action }));
+      if (!add.length) return box.querySelector("[data-parts-new]").focus();
+      const list = parseParts(r.values?.components);
+      for (const c of add) if (!list.some((x) => x.ref === c.ref && x.action === c.action)) list.push(c);
+      return send(`api/rows/${r.id}/patch`, { values: { components: formatParts(list) }, commit: true }).catch(() => {});
+    }
+    case "parts-del": {
+      const list = parseParts(r.values?.components);
+      list.splice(Number(actEl.dataset.i), 1);
+      return send(`api/rows/${r.id}/patch`, { values: { components: formatParts(list) }, commit: true }).catch(() => {});
+    }
     case "research": return loadCandidates();
     case "rot": {
       const reading = r.status === "queued" || r.status === "processing";

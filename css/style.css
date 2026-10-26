@@ -793,3 +793,14 @@ button.snchk { cursor: pointer; font: inherit; font-size: 11px; }
 .tgwarn.ok { border-color: color-mix(in srgb, var(--brand-2) 50%, transparent); background: color-mix(in srgb, var(--brand-2) 10%, transparent); }
 .card-sn { flex-wrap: wrap; }
 .card-sn .card-inp { flex: 1 1 110px; }
+
+/* Vị trí đã xử lý: chip + ô thêm như trang Nhận bo mạch */
+.parts-edit { margin-top: 6px; display: grid; gap: 6px; }
+.parts { display: flex; flex-wrap: wrap; gap: 4px; }
+.part { display: inline-flex; align-items: center; gap: 4px; padding: 2px 4px 2px 8px; border-radius: 999px; font-size: 12px;
+  background: var(--brand-soft); border: 1px solid color-mix(in srgb, var(--brand-2) 40%, transparent); font-family: ui-monospace, monospace; }
+.part-x { border: 0; background: none; color: inherit; cursor: pointer; font-size: 14px; line-height: 1; padding: 0 3px; opacity: .7; }
+.part-x:hover { opacity: 1; }
+.parts-add { display: flex; gap: 4px; }
+.parts-add input { flex: 1; min-width: 0; text-transform: uppercase; }
+.parts-add select { width: auto; }

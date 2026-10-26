@@ -335,12 +335,44 @@ def gemini_generate(cfg: dict, jpeg: bytes, system: str, user: str, schema: dict
     return parse_json_text(text)
 
 
-def gemini_extract(cfg: dict, jpeg: bytes) -> dict:
+def _gemini_extract_once(cfg: dict, jpeg: bytes) -> dict:
     keys = read_fields(cfg)
     if keys:
         system, user = subset_prompt(keys)
         return gemini_generate(cfg, jpeg, system, user, subset_schema(keys))
     return gemini_generate(cfg, jpeg, SYSTEM_PROMPT, USER_TEXT, SCHEMA)
+
+
+# Gemini thỉnh thoảng trả lời rất chậm (đo 26/10/2026, gemini-3.1-flash-lite: thường 4-9 s, có lần 43-93 s).
+# Quá HEDGE_AFTER giây chưa có kết quả -> gửi thêm một yêu cầu y hệt song song, lấy kết quả về trước.
+HEDGE_AFTER = 12.0
+
+
+def hedged(fn, after: float = HEDGE_AFTER):
+    from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
+
+    ex = ThreadPoolExecutor(max_workers=2)
+    try:
+        futs = [ex.submit(fn)]
+        done, _ = wait(futs, timeout=after)
+        if not done:
+            futs.append(ex.submit(fn))
+        first_err = None
+        pending = set(futs)
+        while pending:
+            done, pending = wait(pending, return_when=FIRST_COMPLETED)
+            for f in done:
+                if f.exception() is None:
+                    return f.result()
+                first_err = first_err or f.exception()
+        raise first_err
+    finally:
+        ex.shutdown(wait=False, cancel_futures=True)
+
+
+def gemini_extract(cfg: dict, jpeg: bytes) -> dict:
+    after = float(cfg.get("geminiHedge", HEDGE_AFTER) or 0)
+    return hedged(lambda: _gemini_extract_once(cfg, jpeg), after) if after > 0 else _gemini_extract_once(cfg, jpeg)
 
 
 def gemini_models(cfg: dict) -> list[str]:
@@ -350,8 +382,16 @@ def gemini_models(cfg: dict) -> list[str]:
     return [n for n in names if n.startswith("gemini") and not re.search(r"image|tts|audio|live|embedding|robotics|computer", n, re.I)]
 
 
+# Đo trên tem thật 26/10/2026 (tools/bench_ai.py): gemini-3.1-flash-lite ~4-9 s/tem; các bản *-latest / 3.5 / 3.8
+# thường 25-120 s (xếp hàng phía Google). Có trong danh sách thì gợi ý model này trước.
+FAST_GEMINI = ("gemini-3.1-flash-lite",)
+
+
 def pick_default(models: list[str]) -> str:
-    """Flash (không phải Lite) có số phiên bản cao nhất."""
+    """Model nhanh đã đo (FAST_GEMINI); không có thì Flash (không phải Lite) có số phiên bản cao nhất."""
+    for m in FAST_GEMINI:
+        if m in models:
+            return m
     def ver(n: str) -> float:
         m = re.search(r"gemini-(\d+(?:\.\d+)?)", n)
         return float(m[1]) if m else 0

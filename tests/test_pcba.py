@@ -91,7 +91,11 @@ class FakePcba:
                 return self._ticket(station=res)
         if path == "/tickets/55" and method == "PATCH":
             assert body["version"] == self.ticket["version"]
-            return self._ticket(failureCause=body["failureCause"])
+            return self._ticket(failureCause=body["failureCause"], dispositionType=body["dispositionType"],
+                                dispositionNote=body["dispositionNote"])
+        if path == "/tickets/55/components" and method == "PUT":
+            assert body["version"] == self.ticket["version"]
+            return self._ticket(components=body["items"])
         return Resp({"error": {"code": "NOT_FOUND", "message": path}}, 404)
 
 
@@ -138,6 +142,15 @@ class TestPcba(unittest.TestCase):
         self.assertEqual(events, ["initial_test", "retest", "station_test"])
         self.assertEqual(fake.ticket["station"], "OK")
         self.assertEqual(len(self.puts), 4)  # 2 ảnh x (ảnh đầy đủ + ảnh nhỏ)
+
+    def test_components_and_disposition_type(self):
+        fake = FakePcba()
+        PB.submit(self.client(fake), self.job(components="u12, c46 Thay thế; R5 tháo", disposition_type="Không sửa chữa"), {})
+        self.assertEqual(fake.ticket["components"], [{"ref": "U12", "action": "REPLACE", "note": None},
+                                                     {"ref": "C46", "action": "REPLACE", "note": None},
+                                                     {"ref": "R5", "action": "REMOVE", "note": None}])
+        self.assertEqual((fake.ticket["dispositionType"], fake.ticket["dispositionNote"]), ("NO_REPAIR", "Thay tụ"))
+        self.assertEqual(fake.ticket["status"], "CLOSED")  # PUT components trước kiểm tra lại, version vẫn khớp
 
     def test_open_ticket_blocks_create(self):
         fake = FakePcba(open_ticket={"id": 9, "ticketNo": "PB-0009"})

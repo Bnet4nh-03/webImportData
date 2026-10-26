@@ -37,6 +37,43 @@ SN_REASONS = {  # nhãn tiếng Việt trên web -> mã API
 }
 RESULTS = {"PASS": "PASS", "FAIL": "FAIL", "DISCARD": "DISCARD"}
 STATION = {"OK": "OK", "FAIL": "FAIL", "NOT USED": "NOT_USED", "NOT TESTED": "NOT_TESTED"}  # Pending: để trống
+# Loại xử lý (trang web bỏ DISCARD khỏi danh sách này: Discard đi theo kết quả kiểm tra ban đầu).
+DISPOSITIONS = {"SỬA CHỮA": "REPAIR", "REPAIR": "REPAIR", "KHÔNG SỬA CHỮA": "NO_REPAIR", "NO REPAIR": "NO_REPAIR",
+                "NO_REPAIR": "NO_REPAIR"}
+# Hành động cho từng vị trí đã xử lý (U12, C46…). Chữ viết tắt hay gõ: "thay", "tháo", "sửa".
+ACTIONS = (("THAY THẾ", "REPLACE"), ("THÁO BỎ", "REMOVE"), ("SỬA CHỮA", "REPAIR"), ("REPLACE", "REPLACE"),
+           ("REMOVE", "REMOVE"), ("REPAIR", "REPAIR"), ("THAY", "REPLACE"), ("THÁO", "REMOVE"), ("SỬA", "REPAIR"))
+ACTION_LABEL = {"REPAIR": "Sửa chữa", "REPLACE": "Thay thế", "REMOVE": "Tháo bỏ"}
+
+
+def parse_components(text: str) -> list[dict]:
+    """"U12, C46 Thay thế; R5 Tháo bỏ; Q3" -> [{ref, action, note}]: mỗi đoạn (ngăn bởi ; hoặc xuống dòng) là các vị trí
+    + một hành động (không ghi = Sửa chữa). Vị trí tách như trang web: dấu cách / phẩy / chấm phẩy, viết hoa, bỏ trùng."""
+    out: list[dict] = []
+    for seg in re.split(r"[;\n]+", text or ""):
+        s = " " + seg.upper() + " "
+        action = "REPAIR"
+        for word, code in ACTIONS:
+            m = re.search(rf"(?<![\w]){re.escape(word)}(?![\w])", s)
+            if m:
+                action = code
+                s = s[:m.start()] + " " + s[m.end():]
+                break
+        s = re.sub(r"[()\[\]:]", " ", s)
+        for ref in re.split(r"[\s,;]+", s):
+            ref = ref.strip()
+            if ref and not any(c["ref"] == ref and c["action"] == action for c in out):
+                out.append({"ref": ref, "action": action, "note": None})
+    return out
+
+
+def format_components(items: list[dict]) -> str:
+    groups: dict[str, list[str]] = {}
+    for c in items:
+        groups.setdefault(c["action"], []).append(c["ref"])
+    return "; ".join(f"{', '.join(refs)} {ACTION_LABEL.get(a, a)}" for a, refs in groups.items())
+
+
 PHOTO_LIMITS = {"BEFORE_TEST": 2, "AFTER_REPAIR": 3, "FAILURE_VERIFICATION": 3}
 PHOTO_DEFAULT = {"fullMaxEdge": 2560, "fullQuality": 0.85, "thumbMaxEdge": 400, "thumbQuality": 0.7}
 
@@ -111,6 +148,19 @@ class Job:
     def discard_reason(self) -> str:
         return self.v("disposition") or self.v("failure_cause")
 
+    @property
+    def disposition_type(self) -> str:
+        return DISPOSITIONS.get(self.v("disposition_type").upper(), "REPAIR")  # trống = Sửa chữa (mặc định của web)
+
+    @property
+    def components(self) -> list[dict]:
+        return parse_components(self.v("components"))
+
+    @property
+    def has_repair(self) -> bool:
+        """Có thông tin sửa chữa để gửi (như điều kiện trên web: nguyên nhân, ghi chú hoặc vị trí)."""
+        return bool(self.v("failure_cause") or self.v("disposition") or self.components)
+
 
 def validate(job: Job) -> list[str]:
     err = []
@@ -157,7 +207,8 @@ def preview(job: Job, cat: "Catalog | None" = None) -> list[dict]:
         "create": " · ".join(x for x in (job.v("board"), job.v("contractor"), job.v("ticket_id")) if x),
         "photo_before": n(job.photos_before, 2), "photo_verify": n(job.photos_verify, 3),
         "initial": job.result + (f" — {job.discard_reason}" if job.result == "DISCARD" else ""),
-        "repair": " / ".join(x for x in (job.v("failure_cause"), job.v("disposition")) if x) or "—",
+        "repair": " / ".join(x for x in (job.v("failure_cause"), job.v("disposition_type") or "Sửa chữa",
+                                         job.v("disposition"), format_components(job.components)) if x) or "—",
         "photo_after": n(job.photos_after, 3), "retest": job.retest, "station": job.station,
     }
     return [{"key": k, "label": label, "value": vals.get(k, "")} for k, label in plan_steps(job)]
@@ -394,14 +445,21 @@ def submit(c: Client, job: Job, progress: dict, save: Callable[[dict], None] | N
     transition("initial", {"event": "initial_test", "result": job.result,
                            **({"reason": job.discard_reason} if job.result == "DISCARD" else {})})
     if job.result == "FAIL":
-        if "repair" not in done and (job.v("failure_cause") or job.v("disposition")):
+        if "repair" not in done and job.has_repair:
             check()
             step("repair", "Nguyên nhân lỗi + xử lý")
             res = c.call("PATCH", f"/tickets/{tid}", {
                 "version": progress["version"], "failureCause": job.v("failure_cause"),
-                "dispositionType": "REPAIR", "dispositionNote": job.v("disposition")})
+                "dispositionType": job.disposition_type, "dispositionNote": job.v("disposition")})
             t = res.get("ticket") or {}
             mark("repair", version=t.get("version", progress["version"]), status=t.get("status", progress.get("status", "")))
+        if "components" not in done and job.components:
+            check()
+            step("repair", f"Vị trí đã xử lý: {format_components(job.components)}")
+            res = c.call("PUT", f"/tickets/{tid}/components", {"version": progress["version"], "items": job.components})
+            t = res.get("ticket") or {}
+            mark("components", version=t.get("version", progress["version"]),
+                 status=t.get("status", progress.get("status", "")))
         photos("photo_after", "AFTER_REPAIR", job.photos_after)
         if job.retest and progress.get("status") in ("REPAIRING", ""):
             step("retest", f"Kiểm tra lại: {job.retest}")

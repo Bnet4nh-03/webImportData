@@ -46,7 +46,7 @@ STATIC = ("/index.html", "/css/", "/js/", "/favicon")
 FIXED_KEYS = (
     "board", "contractor", "test_tool_result", "failure_cause", "disposition", "after_repair_result",
     "charging_station_test_status", "ticket_id", "sn", "date_onsite", "original_phenomenon", "station_code",
-    "failure_verification", "board_sn", "sn_missing_reason",
+    "failure_verification", "board_sn", "sn_missing_reason", "components", "disposition_type",
 )
 # Ảnh kèm theo cột: kind -> (trường lưu danh sách ảnh trên dòng, tên file khi tải .zip)
 PHOTO_KINDS = {"after": ("photos", "sau_sua"), "verify": ("vphotos", "xac_minh")}
@@ -1587,7 +1587,7 @@ def main() -> None:
         DATA = Path(args.data).resolve()
         IMAGES = DATA / "images"
     lock_data_dir(DATA)  # trước khi đọc state.json: không cho server thứ hai chạy cùng thư mục
-    index = M.TicketIndex(args.db)
+    index = M.TicketIndex(args.db, DATA / "ticket_index.cache")
     if index.ok:
         index.ensure()
     else:

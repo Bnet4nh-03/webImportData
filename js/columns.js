@@ -39,6 +39,38 @@ export const RESULTS = ["PASS", "FAIL", "Discard"];
 export const STATION_STATUS = ["Pending", "OK", "FAIL", "Not used", "Not tested"];
 // Lý do không có SN bo mạch (đúng 4 lựa chọn của trang Nhận bo mạch).
 export const SN_REASONS = ["Không có tem", "Tem hỏng", "Tem không đọc được", "Lý do khác"];
+// Loại xử lý (Sửa chữa là mặc định của web khi để trống) + hành động cho từng vị trí đã xử lý.
+export const DISPOSITION_TYPES = ["Sửa chữa", "Không sửa chữa"];
+export const PART_ACTIONS = ["Sửa chữa", "Thay thế", "Tháo bỏ"];
+const ACTION_WORDS = [["THAY THẾ", "Thay thế"], ["THÁO BỎ", "Tháo bỏ"], ["SỬA CHỮA", "Sửa chữa"], ["REPLACE", "Thay thế"],
+  ["REMOVE", "Tháo bỏ"], ["REPAIR", "Sửa chữa"], ["THAY", "Thay thế"], ["THÁO", "Tháo bỏ"], ["SỬA", "Sửa chữa"]];
+
+/** "U12, C46 Thay thế; R5 Tháo bỏ" -> [{ref, action}] — giống parse_components trong pcba_api.py. */
+export function parseParts(text) {
+  const out = [];
+  for (const seg of String(text || "").split(/[;\n]+/)) {
+    let s = ` ${seg.toUpperCase()} `;
+    let action = "Sửa chữa";
+    for (const [w, a] of ACTION_WORDS) {
+      const m = new RegExp(`(?<![\\p{L}\\p{N}_])${w}(?![\\p{L}\\p{N}_])`, "u").exec(s);
+      if (m) {
+        action = a;
+        s = s.slice(0, m.index) + " " + s.slice(m.index + w.length);
+        break;
+      }
+    }
+    for (const ref of s.replace(/[()[\]:]/g, " ").split(/[\s,;]+/)) {
+      if (ref && !out.some((c) => c.ref === ref && c.action === action)) out.push({ ref, action });
+    }
+  }
+  return out;
+}
+
+export function formatParts(items) {
+  const groups = new Map();
+  for (const c of items) groups.set(c.action, [...(groups.get(c.action) ?? []), c.ref]);
+  return [...groups].map(([a, refs]) => `${refs.join(", ")} ${a}`).join("; ");
+}
 export const VERIFY_STATUS = ["Pending", "PASS"];
 
 // Ảnh kèm theo cột: kind gửi lên server, field lưu trên dòng, tên hiển thị.
@@ -80,7 +112,10 @@ export const COLUMNS = [
   { key: "contractor", label: "Contractor", options: CONTRACTORS, group: "repair" },
   { key: "test_tool_result", label: "test_tool_result", options: RESULTS, group: "repair" },
   { key: "failure_cause", label: "failure_cause", wide: true, group: "repair" },
-  { key: "disposition", label: "disposition", wide: true, group: "repair" },
+  // Trang web: Vị trí đã xử lý (U12, C46 + Sửa chữa / Thay thế / Tháo bỏ), Loại xử lý, Ghi chú xử lý (= disposition).
+  { key: "components", label: "Vị trí đã xử lý", wide: true, parts: true, group: "repair" },
+  { key: "disposition_type", label: "Loại xử lý", options: DISPOSITION_TYPES, group: "repair" },
+  { key: "disposition", label: "disposition (ghi chú xử lý)", wide: true, group: "repair" },
   { key: "after_repair_result", label: "after_repair_result", options: RESULTS, photo: PHOTO.after, group: "repair" },
   { key: "charging_station_test_status", label: "charging_station_test_status", options: STATION_STATUS, group: "repair" },
   { key: "ticket_id", label: "Ticket ID", ai: "Ticket", db: "ccts_ticket_id" },

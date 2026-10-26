@@ -145,6 +145,9 @@ Pending = để trống). Số phiếu trả về hiện ở cột **📤 PCBA �
   (BarcodeDetector hoặc `js/vendor/jsQR.js`), ghi SN rồi tự tra trên hệ thống: `✓ model · n` (bo đã có, n phiếu cũ — ô Board
   trống thì tự điền), `mới` (bo chưa có), `⚠ số phiếu` (bo đang có phiếu mở → không tạo mới). Gõ tay SN cũng được.
 - **Lý do không có SN**: Không có tem / Tem hỏng / Tem không đọc được / Lý do khác (bắt buộc khi không có SN).
+- **Sửa chữa** (FAIL), như trang web: `failure_cause` = Nguyên nhân lỗi; **Vị trí đã xử lý** = các vị trí + hành động, gõ kiểu
+  `U12, C46 Thay thế; R5 Tháo bỏ` (không ghi hành động = Sửa chữa) hoặc thêm bằng ô "Ví dụ: U12, C46" + chọn hành động + **+ Thêm**
+  trong khung chi tiết; **Loại xử lý** = Sửa chữa / Không sửa chữa (trống = Sửa chữa); `disposition` = Ghi chú xử lý.
 - Discard cần lý do: lấy từ cột `disposition` (hoặc `failure_cause`).
 - Lỗi giữa chừng: bấm **📤 Tiếp tục** — làm tiếp từ bước dở (nhớ id phiếu + Idempotency-Key), không tạo phiếu trùng.
 
@@ -215,3 +218,15 @@ Cách app làm với model trên máy:
 
 40–50 ảnh/ngày ≈ 50–80 phút máy tự chạy nền. Cứ chụp liên tục trên điện thoại; ảnh vào hàng đợi và được đọc dần.
 Muốn chính xác hơn (chậm gấp ~2): `ollama pull qwen3-vl:8b-instruct` (6,1 GB) rồi đổi model trong ⚙️.
+
+## Tốc độ đọc tem (đo 26/10/2026, `python tools/bench_ai.py`)
+
+| Mô hình | Thời gian / tem | Ghi chú |
+|---|---|---|
+| Ollama `qwen3-vl:4b` (CPU Ryzen 7 5700U) | ~96-113 s | ảnh 640 px không nhanh hơn 1024 px |
+| Gemini `gemini-flash-lite-latest` | ~25-36 s | API xếp hàng: câu "OK" cũng 28 s |
+| **Gemini `gemini-3.1-flash-lite`** | **~4-9 s** | mặc định; quá 12 s chưa trả lời thì gửi thêm 1 yêu cầu song song (`ocr.hedged`) |
+
+Ảnh tem gửi lên Google khi dùng Gemini. Muốn đọc hoàn toàn trên máy: ⚙️ → Đọc tem → Ollama (chậm hơn ~15 lần).
+Tra DB: tìm + chấm điểm 10-20 ms/tem (chỉ mục trong RAM); khởi động nạp chỉ mục từ `data/ticket_index.cache` ~2 s
+(dựng lại ~17 s khi DB thay đổi).
